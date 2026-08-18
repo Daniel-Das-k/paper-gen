@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+artifacts/
+dist/
+build/
+*.egg-info/
+node_modules/
+frontend/.vite/
+frontend/coverage/
+test_papers/*
+!test_papers/README.md
+outputs/*
+!outputs/README.md
+.DS_Store
