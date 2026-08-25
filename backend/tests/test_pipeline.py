@@ -19,7 +19,7 @@ from question_paper_gen.models import (
     Topic,
     ValidatedQuestion,
 )
-from question_paper_gen.patterns import default_college_pattern
+from question_paper_gen.patterns import autonomous_semester_pattern
 from question_paper_gen.pipeline import PaperGenerationPipeline
 
 
@@ -46,11 +46,13 @@ class FakeAnalyzer:
         def unique_focus(slot: dict[str, object]) -> str:
             import hashlib
 
+            # A two-mark question must stay short, so it gets a short marker.
+            tokens = 6 if int(slot["marks"]) <= 2 else 20
             return " ".join(
                 hashlib.sha256(
                     f"{slot['slot_id']}-{index}".encode("utf-8")
                 ).hexdigest()[:12]
-                for index in range(20)
+                for index in range(tokens)
             )
 
         def answer_text(slot: dict[str, object]) -> str:
@@ -99,9 +101,9 @@ class FakeAnalyzer:
                 )
             bloom = str(slot["bloom_level"])
             section_concept = {
-                "section_b": "relation keys and dependency rules",
-                "section_c": "normal-form decomposition and lossless joins",
-                "section_d": "schema design trade-offs and integrity constraints",
+                "part_a": "relation keys and dependency rules",
+                "part_b": "normal-form decomposition and lossless joins",
+                "part_c": "schema design trade-offs and integrity constraints",
             }[str(slot["section_id"])]
             prompt = {
                 "remember": "Define the source concept",
@@ -123,10 +125,11 @@ class FakeAnalyzer:
                     ", showing each reasoning step and explaining how the conclusion "
                     "follows from the supplied academic evidence"
                 )
+
             if slot["has_internal_choice"]:
                 return (
-                    f"{base} using the first source example.\nOR\n"
-                    f"{base} using the second source example."
+                    f"(a) {base} using the first source example.\nOR\n"
+                    f"(b) {base} using the second source example."
                 )
             return base
 
@@ -216,6 +219,7 @@ class RepairingFakeAnalyzer(FakeAnalyzer):
     def __init__(self) -> None:
         super().__init__()
         self.question_review_calls = 0
+        self.last_repair_prompt = ""
 
     async def review_section(
         self,
@@ -267,6 +271,7 @@ class RepairingFakeAnalyzer(FakeAnalyzer):
         import json
 
         self.repair_calls += 1
+        self.last_repair_prompt = repair_prompt
         slot = json.loads(repair_prompt)["locked_slots"][0]
         return SectionQuestionBatch(
             questions=[
@@ -339,7 +344,116 @@ class RetryingRepairAnalyzer(RepairingFakeAnalyzer):
             confidence=0.95,
         )
 
-def test_pipeline_produces_review_required_80_mark_draft() -> None:
+
+def test_faculty_regeneration_preserves_slot_and_includes_comment() -> None:
+    manifest = DocumentManifest(
+        document_id="doc",
+        original_filename="notes.pdf",
+        sha256="a" * 64,
+        source_pdf_path="/tmp/source.pdf",
+        artifact_directory="/tmp/artifacts",
+        pages=[
+            PageContent(
+                page_number=1,
+                width=600,
+                height=800,
+                text="A grounded source chapter with sufficient academic content.",
+                rendered_image_path="/tmp/page.png",
+            )
+        ],
+        visual_assets=[],
+        quality=DocumentQuality(
+            passed=True,
+            page_count=1,
+            text_character_count=100,
+        ),
+    )
+    content = ContentMap(
+        subject="Database Systems",
+        topics=[
+            Topic(
+                topic_id=f"topic-{unit}",
+                name=f"Topic {unit}",
+                unit=str(unit),
+                source_pages=[1],
+                supported_bloom_levels=list(BloomLevel),
+            )
+            for unit in range(1, 6)
+        ],
+    )
+    slot = BlueprintBuilder().build(
+        autonomous_semester_pattern(), content, manifest
+    ).slots[0]
+    current = ValidatedQuestion(
+        candidate=QuestionCandidate(
+            candidate_id="original-question",
+            slot_id=slot.slot_id,
+            question_text="Which response repeats another question?",
+            answer="Option (A).",
+            marks=slot.marks,
+            bloom_level=slot.bloom_level,
+            bloom_justification="Original blueprint level.",
+            marking_scheme=[
+                MarkingCriterion(criterion="Correct option", marks=slot.marks)
+            ],
+            evidence=SourceEvidence(
+                page_numbers=[1],
+                excerpts=["grounded source chapter"],
+            ),
+            confidence=0.95,
+        ),
+        accepted=False,
+        findings=[],
+    )
+    analyzer = RepairingFakeAnalyzer()
+    regenerated = asyncio.run(
+        PaperGenerationPipeline(
+            analyzer,
+            request_interval_seconds=0,
+        ).regenerate_question(
+            slot=slot,
+            current_question=current,
+            mode="guided",
+            faculty_comment="Make it direct and do not repeat Question 8.",
+            other_question_texts=["Explain a completely separate source concept."],
+            content_map=content,
+            manifest=manifest,
+        )
+    )
+
+    assert regenerated.accepted
+    assert regenerated.candidate.slot_id == slot.slot_id
+    assert regenerated.candidate.marks == slot.marks
+    assert regenerated.candidate.bloom_level == slot.bloom_level
+    assert "Make it direct and do not repeat Question 8." in analyzer.last_repair_prompt
+    assert "Explain a completely separate source concept." in analyzer.last_repair_prompt
+
+    fresh = asyncio.run(
+        PaperGenerationPipeline(
+            analyzer,
+            request_interval_seconds=0,
+        ).regenerate_question(
+            slot=slot,
+            current_question=current,
+            mode="fresh",
+            faculty_comment="",
+            other_question_texts=["Explain a completely separate source concept."],
+            content_map=content,
+            manifest=manifest,
+        )
+    )
+    import json
+
+    fresh_payload = json.loads(analyzer.last_repair_prompt)
+    assert fresh.accepted
+    assert fresh_payload["regeneration_mode"] == "fresh"
+    assert "faculty_instruction" not in fresh_payload
+    assert "question_being_replaced" not in fresh_payload
+    assert current.candidate.question_text in fresh_payload[
+        "other_question_texts_to_avoid"
+    ]
+
+def test_pipeline_produces_review_required_100_mark_draft() -> None:
     manifest = DocumentManifest(
         document_id="doc",
         original_filename="notes.pdf",
@@ -375,27 +489,34 @@ def test_pipeline_produces_review_required_80_mark_draft() -> None:
             Topic(
                 topic_id="keys",
                 name="Relation keys",
-                unit="1",
+                unit="2",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="indexing",
                 name="Indexing",
-                unit="2",
+                unit="3",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="transactions",
                 name="Transactions",
-                unit="2",
+                unit="4",
+                source_pages=[1],
+                supported_bloom_levels=list(BloomLevel),
+            ),
+            Topic(
+                topic_id="recovery",
+                name="Recovery",
+                unit="5",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
         ],
     )
-    pattern = default_college_pattern()
+    pattern = autonomous_semester_pattern()
     blueprint = BlueprintBuilder().build(pattern, content, manifest)
 
     analyzer = ConcurrentFakeAnalyzer()
@@ -411,18 +532,18 @@ def test_pipeline_produces_review_required_80_mark_draft() -> None:
         )
     )
 
-    assert len(paper.questions) == 38
-    assert sum(question.candidate.marks for question in paper.questions) == 80
+    assert len(paper.questions) == 16
+    assert sum(question.candidate.marks for question in paper.questions) == 100
     assert all(question.accepted for question in paper.questions)
     assert paper.publication_ready
     assert paper.requires_human_approval
     assert paper.publication_ready
     assert paper.subject_family == "computing"
     assert all(question.quality_score == 100 for question in paper.questions)
-    assert analyzer.generation_calls == 5
-    assert analyzer.maximum_generation_concurrency == 5
-    assert analyzer.review_calls == 5
-    assert sorted(analyzer.reviewed_question_counts) == [3, 4, 5, 6, 20]
+    assert analyzer.generation_calls == 3
+    assert analyzer.maximum_generation_concurrency == 3
+    assert analyzer.review_calls == 3
+    assert sorted(analyzer.reviewed_question_counts) == [1, 5, 10]
 
 
 def test_pipeline_repairs_and_rereviews_rejected_questions() -> None:
@@ -461,27 +582,34 @@ def test_pipeline_repairs_and_rereviews_rejected_questions() -> None:
             Topic(
                 topic_id="keys",
                 name="Relation keys",
-                unit="1",
+                unit="2",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="indexing",
                 name="Indexing",
-                unit="2",
+                unit="3",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="transactions",
                 name="Transactions",
-                unit="2",
+                unit="4",
+                source_pages=[1],
+                supported_bloom_levels=list(BloomLevel),
+            ),
+            Topic(
+                topic_id="recovery",
+                name="Recovery",
+                unit="5",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
         ],
     )
-    pattern = default_college_pattern()
+    pattern = autonomous_semester_pattern()
     blueprint = BlueprintBuilder().build(pattern, content, manifest)
     analyzer = RepairingFakeAnalyzer()
 
@@ -498,11 +626,11 @@ def test_pipeline_repairs_and_rereviews_rejected_questions() -> None:
     )
 
     assert all(question.accepted for question in paper.questions)
-    assert analyzer.generation_calls == 5
+    assert analyzer.generation_calls == 3
     assert analyzer.repair_calls == 1
     assert analyzer.question_review_calls == 1
-    assert analyzer.review_calls == 5
-    assert sum(analyzer.reviewed_question_counts) == 38
+    assert analyzer.review_calls == 3
+    assert sum(analyzer.reviewed_question_counts) == 16
 
 
 def test_pipeline_retries_an_individual_question_when_repair_score_is_low() -> None:
@@ -541,27 +669,34 @@ def test_pipeline_retries_an_individual_question_when_repair_score_is_low() -> N
             Topic(
                 topic_id="keys",
                 name="Relation keys",
-                unit="1",
+                unit="2",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="indexing",
                 name="Indexing",
-                unit="2",
+                unit="3",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="transactions",
                 name="Transactions",
-                unit="2",
+                unit="4",
+                source_pages=[1],
+                supported_bloom_levels=list(BloomLevel),
+            ),
+            Topic(
+                topic_id="recovery",
+                name="Recovery",
+                unit="5",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
         ],
     )
-    pattern = default_college_pattern()
+    pattern = autonomous_semester_pattern()
     blueprint = BlueprintBuilder().build(pattern, content, manifest)
     analyzer = RetryingRepairAnalyzer()
 
@@ -577,7 +712,7 @@ def test_pipeline_retries_an_individual_question_when_repair_score_is_low() -> N
     assert paper.publication_ready
     assert analyzer.repair_calls == 2
     assert analyzer.question_review_calls == 2
-    assert analyzer.review_calls == 5
+    assert analyzer.review_calls == 3
 
 
 def test_generated_text_cleanup_removes_internal_ids_and_common_latex() -> None:
@@ -720,12 +855,17 @@ def test_semantic_review_does_not_repeat_the_same_reason_for_every_failed_check(
     assert messages.count("The answer uses an unsupported theorem.") == 1
 
 def _case_study_slot() -> "BlueprintSlot":
+    """A case-study slot for validator coverage.
+
+    No shipped pattern uses this question kind today, but the validator still
+    supports it, so the fixture is built by hand rather than taken from one.
+    """
     from question_paper_gen.models import BlueprintSlot, QuestionKind
 
     return BlueprintSlot(
-        slot_id="section_e-1",
+        slot_id="case-study-1",
         question_number="36",
-        section_id="section_e",
+        section_id="case_study",
         marks=4,
         bloom_level=BloomLevel.APPLY,
         question_kind=QuestionKind.CASE_STUDY,
@@ -907,27 +1047,34 @@ def test_repair_ladder_swaps_facet_on_third_attempt() -> None:
             Topic(
                 topic_id="keys",
                 name="Relation keys",
-                unit="1",
+                unit="2",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="indexing",
                 name="Indexing",
-                unit="2",
+                unit="3",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
             Topic(
                 topic_id="transactions",
                 name="Transactions",
-                unit="2",
+                unit="4",
+                source_pages=[1],
+                supported_bloom_levels=list(BloomLevel),
+            ),
+            Topic(
+                topic_id="recovery",
+                name="Recovery",
+                unit="5",
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             ),
         ],
     )
-    pattern = default_college_pattern()
+    pattern = autonomous_semester_pattern()
     blueprint = BlueprintBuilder().build(pattern, content, manifest)
     analyzer = FacetEscalationAnalyzer()
 
@@ -1011,14 +1158,15 @@ def test_paper_question_numbers_follow_blueprint_order() -> None:
             Topic(
                 topic_id=f"topic-{index}",
                 name=f"Topic {index}",
-                unit="1",
+                # One per unit: the end-semester paper examines all five.
+                unit=str(index),
                 source_pages=[1],
                 supported_bloom_levels=list(BloomLevel),
             )
-            for index in range(1, 5)
+            for index in range(1, 6)
         ],
     )
-    pattern = default_college_pattern()
+    pattern = autonomous_semester_pattern()
     blueprint = BlueprintBuilder().build(pattern, content, manifest)
 
     paper = asyncio.run(
@@ -1039,7 +1187,7 @@ def test_paper_question_numbers_follow_blueprint_order() -> None:
 
     public = GeneratedQuestionPaper.from_internal(paper, blueprint)
     assert [item.question_number for item in public.questions] == [
-        str(number) for number in range(1, 39)
+        str(number) for number in range(1, 17)
     ]
 
 

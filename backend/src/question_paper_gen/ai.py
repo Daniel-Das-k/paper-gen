@@ -4,11 +4,16 @@ import logging
 import os
 import re
 import time
+
+import fitz
+from collections import Counter
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
+import boto3
+from botocore.config import Config as BotocoreConfig
 from pydantic_ai.models.bedrock import BedrockConverseModel
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.profiles import ModelProfile
@@ -19,6 +24,7 @@ from .models import (
     BloomLevel,
     ContentMap,
     DocumentManifest,
+    PageContent,
     QuestionCandidate,
     Topic,
     VisualAsset,
@@ -65,6 +71,21 @@ def _is_transient_model_error(error: Exception) -> bool:
                 "MODELSTREAMERROREXCEPTION",
                 "MODELTIMEOUTEXCEPTION",
                 "TOO MANY REQUESTS",
+                # Connection-level failures carry no HTTP status, so they must be
+                # matched by message or a large analysis request that drops mid
+                # flight fails outright instead of retrying.
+                "CONNECTION WAS CLOSED",
+                "COULD NOT CONNECT",
+                "CONNECTIONCLOSEDERROR",
+                "ENDPOINTCONNECTIONERROR",
+                "CONNECTIONERROR",
+                "CONNECTION ABORTED",
+                "CONNECTION RESET",
+                "CONNECTTIMEOUTERROR",
+                "CONNECT TIMEOUT",
+                "READTIMEOUTERROR",
+                "READ TIMEOUT",
+                "TIMED OUT",
             )
         )
     if transient:
@@ -74,6 +95,14 @@ def _is_transient_model_error(error: Exception) -> bool:
             status_code or "unknown",
         )
     return transient
+
+
+def _is_input_too_long_error(error: BaseException) -> bool:
+    """Whether Bedrock rejected a request for exceeding model context."""
+    if isinstance(error, BaseExceptionGroup):
+        return any(_is_input_too_long_error(item) for item in error.exceptions)
+    message = str(error).lower()
+    return "input is too long" in message or "input too long" in message
 
 
 def is_transient_model_failure(error: Exception) -> bool:
@@ -144,10 +173,29 @@ class DocumentAnalysisOutput(BaseModel):
     visual_assessments: list[BatchVisualAssessment] = Field(default_factory=list)
 
 
+class SyllabusUnit(BaseModel):
+    number: str
+    title: str
+    topics: str
+
+
+class SyllabusExtraction(BaseModel):
+    """What an Anna University style syllabus page states about one course."""
+
+    subject_code: str | None = None
+    subject_name: str | None = None
+    regulation: str | None = None
+    units: list[SyllabusUnit] = Field(default_factory=list)
+    course_outcomes: list[str] = Field(default_factory=list)
+    extraction_confident: bool = True
+    problem: str | None = None
+
+
 class SemanticReview(BaseModel):
     grounded_in_evidence: bool
     answer_correct: bool
     bloom_level_correct: bool
+    observed_bloom_level: BloomLevel | None = None
     wording_clear: bool
     visual_consistent: bool = True
     visual_necessary: bool = True
@@ -174,6 +222,97 @@ class SectionReviewBatch(BaseModel):
     reviews: list[SectionQuestionReview]
 
 
+#: The provider caps a request two different ways and both bite. A 200K-context
+#: model refuses more than 100 PDF pages, and it also refuses any request whose
+#: tokens exceed the window — and 100 pages of PDF is roughly the whole 200K
+#: window on its own. Pages alone are therefore the wrong budget; tokens are.
+PROVIDER_MAX_PDF_PAGES = 100
+
+#: Context window of the analysis model. Override for a 1M-context model.
+DEFAULT_CONTEXT_TOKENS = 200_000
+
+#: What one PDF page costs once rendered and tokenised. The previous 2K estimate
+#: still let a 55-page sample overflow once the chunk catalog and figures were
+#: added, so use a conservative mixed text/diagram allowance.
+DEFAULT_TOKENS_PER_PDF_PAGE = 3_500
+
+#: Held back for everything that is not the PDF. Roughly: 24k reply, 10k chunk
+#: catalog, ~19k for twelve candidate figures, 4k of prompt — rounded up so the
+#: window is not filled to the millimetre.
+DEFAULT_RESERVED_TOKENS = 70_000
+
+#: Page cost is an estimate, so the budget must not fill the window exactly —
+#: that is how a request lands at 202,387 tokens against a 200,000 limit. Aim at
+#: this share of the window and leave the rest as slack.
+CONTEXT_FILL_FACTOR = 0.9
+
+#: Kept for callers and tests; read the live value through max_attached_pdf_pages().
+MAX_ATTACHED_PDF_PAGES = PROVIDER_MAX_PDF_PAGES
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def max_attached_pdf_pages() -> int:
+    """How many PDF pages fit this model's context, not just its page limit.
+
+    Sending 100 pages satisfied the page cap and then overflowed the window at
+    202,387 tokens. The budget is therefore derived: whatever the context window
+    has left after the prompt, catalog, figures and reply are reserved, divided
+    by what a page costs — then clamped to the provider's own page ceiling.
+    """
+    explicit = os.getenv("MAX_ATTACHED_PDF_PAGES")
+    if explicit:
+        try:
+            return max(1, min(int(explicit), PROVIDER_MAX_PDF_PAGES))
+        except ValueError:
+            pass
+    context = _env_int("BEDROCK_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+    reserved = _env_int("BEDROCK_RESERVED_TOKENS", DEFAULT_RESERVED_TOKENS)
+    per_page = _env_int("TOKENS_PER_PDF_PAGE", DEFAULT_TOKENS_PER_PDF_PAGE)
+    usable = int(context * CONTEXT_FILL_FACTOR)
+    affordable = max(1, (usable - reserved) // per_page)
+    return min(affordable, PROVIDER_MAX_PDF_PAGES)
+
+
+def bounded_pdf_attachment(
+    pdf_path: str | Path,
+    page_limit: int | None = None,
+) -> tuple[bytes, int, int]:
+    """Return PDF bytes the provider will accept, plus what was sent and held.
+
+    Three units of course material easily exceed a 200K-context model's 100-page
+    limit. Sending the first hundred pages would make the later units invisible
+    to the model — on a unit-wise paper that means CAT-I sees unit 1 and little
+    else — so pages are sampled evenly across the whole selection instead. The
+    extracted page text is unaffected and still covers every page, and it is the
+    text that evidence chunks and grounding are built from; the PDF only adds
+    layout and figures on top.
+    """
+    limit = max_attached_pdf_pages()
+    if page_limit is not None:
+        limit = min(limit, max(1, page_limit))
+    path = Path(pdf_path)
+    with fitz.open(path) as document:
+        total = document.page_count
+        if total <= limit:
+            return path.read_bytes(), total, total
+        step = total / limit
+        keep = sorted(
+            {min(total - 1, int(index * step)) for index in range(limit)}
+        )
+        sampled = fitz.open()
+        for page_index in keep:
+            sampled.insert_pdf(document, from_page=page_index, to_page=page_index)
+        data = sampled.tobytes()
+        sampled.close()
+    return data, len(keep), total
+
+
 class DocumentAnalyzer:
     """AWS Bedrock Claude analysis isolated behind a typed provider boundary."""
 
@@ -195,7 +334,25 @@ class DocumentAnalyzer:
             ).split(",")
             if name.strip()
         ]
-        provider = BedrockProvider(region_name=region)
+        # Large PDF requests need time in both directions. `connect_timeout` is
+        # also the socket timeout while urllib3 writes the request body, so the
+        # old 30-second value could abort a multi-megabyte upload before Bedrock
+        # had even received it. Keep upload and response budgets independent.
+        connect_timeout = max(
+            30, _env_int("BEDROCK_CONNECT_TIMEOUT_SECONDS", 120)
+        )
+        read_timeout = max(60, _env_int("BEDROCK_READ_TIMEOUT_SECONDS", 600))
+        provider = BedrockProvider(
+            bedrock_client=boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=BotocoreConfig(
+                    read_timeout=read_timeout,
+                    connect_timeout=connect_timeout,
+                    retries={"max_attempts": 3, "mode": "adaptive"},
+                ),
+            )
+        )
         max_output_tokens = max(
             1024,
             int(os.getenv("BEDROCK_MAX_OUTPUT_TOKENS", "24000")),
@@ -269,6 +426,11 @@ class DocumentAnalyzer:
             output_type=ContentMap,
             output_retries=output_retries,
         )
+        self.syllabus_agent = Agent(
+            model=analysis_model,
+            output_type=SyllabusExtraction,
+            output_retries=output_retries,
+        )
         self.visual_agent = Agent(
             model=analysis_model,
             output_type=VisualAssessment,
@@ -300,11 +462,64 @@ class DocumentAnalyzer:
             output_retries=output_retries,
         )
 
+    async def extract_syllabus(self, pdf_path: str) -> SyllabusExtraction:
+        """Read one course's syllabus page: units and approved course outcomes.
+
+        Transcription, not interpretation. The outcomes are a governance artifact
+        the department wrote, so they come back verbatim for a human to confirm --
+        this never becomes a source of outcomes nobody approved.
+        """
+        started = time.perf_counter()
+        path = Path(pdf_path)
+        logger.info("ai.syllabus_extraction.start file=%s", path.name)
+        result = await self.syllabus_agent.run(
+            [
+                """
+                Transcribe one course's syllabus page from the attached PDF.
+
+                - Copy the course outcomes VERBATIM, one entry per listed outcome,
+                  in the order printed. Do not reword, renumber, merge, split,
+                  summarise, or invent them, and do not carry over the "On
+                  completion of the course students will be able to:" preamble.
+                - Copy the course objectives nowhere: objectives and outcomes are
+                  different sections. Take only the section headed Course Outcomes.
+                - For each unit, return its number exactly as printed (I, II, 1, 2),
+                  its title, and the topic line beneath it.
+                - Return subject_code, subject_name and regulation only if printed.
+                - If the page holds several courses, or you cannot find a course
+                  outcomes section, set extraction_confident to false, explain in
+                  problem, and return whatever you are sure of.
+                """,
+                BinaryContent(
+                    data=bounded_pdf_attachment(path)[0],
+                    media_type="application/pdf",
+                ),
+            ]
+        )
+        output = result.output
+        logger.info(
+            "ai.syllabus_extraction.complete subject=%s units=%d outcomes=%d "
+            "confident=%s duration_seconds=%.2f model_calls=1",
+            output.subject_name,
+            len(output.units),
+            len(output.course_outcomes),
+            output.extraction_confident,
+            time.perf_counter() - started,
+        )
+        return output
+
     async def analyze_document(
         self,
         manifest: DocumentManifest,
+        course_outcomes: list[str] | None = None,
     ) -> tuple[ContentMap, list[VisualAsset]]:
-        """Analyze content and a bounded visual set in one multimodal request."""
+        """Analyze content and a bounded visual set in one multimodal request.
+
+        `course_outcomes` are the department's approved outcomes. They are a closed
+        set the model may only choose from — never extend, never invent. When none
+        are supplied, topics come back with no outcome at all rather than a
+        plausible-looking guess.
+        """
         started = time.perf_counter()
         candidates = self._select_visual_candidates(manifest)
         logger.info(
@@ -316,7 +531,49 @@ class DocumentAnalyzer:
             len(candidates),
         )
         pdf_path = Path(manifest.source_pdf_path)
+        pdf_bytes, attached_pages, total_pages = bounded_pdf_attachment(pdf_path)
+        if attached_pages < total_pages:
+            logger.info(
+                "ai.document_analysis.pdf_sampled attached=%d of=%d limit=%d",
+                attached_pages,
+                total_pages,
+                max_attached_pdf_pages(),
+            )
+        sampling_note = (
+            ""
+            if attached_pages == total_pages
+            else (
+                f"\n            - The attached PDF is an evenly spaced sample of "
+                f"{attached_pages} pages from the {total_pages}-page selection, "
+                "because the provider accepts no more. The page text catalog "
+                "below is complete and authoritative; use the PDF only for "
+                "layout and figures, and never conclude a topic is absent merely "
+                "because its pages are not in the attachment.\n"
+            )
+        )
         chunk_catalog = self._content_chunk_catalog(manifest)
+        approved_outcomes = [
+            outcome.strip() for outcome in (course_outcomes or []) if outcome.strip()
+        ]
+        if approved_outcomes:
+            outcome_lines = "\n".join(
+                f"              CO{index}: {outcome}"
+                for index, outcome in enumerate(approved_outcomes, start=1)
+            )
+            outcome_instruction = (
+                "\n            - The department has approved these course outcomes. "
+                "For each topic, set course_outcomes to the ONE entry from this list "
+                "whose wording the topic's content actually serves, copied verbatim. "
+                "Choose nothing outside the list, never reword an entry, and leave "
+                "course_outcomes empty when no entry genuinely fits:\n"
+                f"{outcome_lines}\n"
+            )
+        else:
+            outcome_instruction = (
+                "\n            - Leave every topic's course_outcomes empty. Course "
+                "outcomes are approved by the department and cannot be inferred from "
+                "source material.\n"
+            )
         content: list[object] = [
             f"""
             Analyze this selected excerpt from a college study document in one response.
@@ -345,9 +602,27 @@ class DocumentAnalyzer:
             - Every topic must return evidence_chunk_ids from the backend-owned catalog
               below. Choose only chunks that directly explain that topic; do not attach
               every chunk from the same page.
-            - Do not invent subtopics, formulas, examples, facts, or course outcomes.
-            - Report only Bloom levels that the explained content can authentically
-              support. It is acceptable for a topic to support only lower levels.
+            - Do not invent subtopics, formulas, examples, facts, or course outcomes.{outcome_instruction}{sampling_note}
+            - supported_bloom_levels is about what a student can be ASKED TO DO with
+              the concept, not about how the page is written. Source material is
+              expository by nature; that does not cap it at Remember/Understand.
+              Judge each level against these tests, and include every level that
+              passes:
+                Remember    the topic states facts, definitions, or terminology.
+                Understand  the topic explains why something holds or how it works.
+                Apply       the topic gives a method, algorithm, formula, procedure,
+                            or worked example a student could run on a fresh case.
+                Analyze     the topic has parts that interact, alternatives that can
+                            be compared, or a failure mode that can be diagnosed.
+                Evaluate    the topic involves a choice, trade-off, or criterion by
+                            which one option is judged better than another.
+                Create      the topic supports designing, deriving, or constructing
+                            something new from its rules.
+              A topic that presents a procedure supports Apply even if the page only
+              demonstrates it once. A topic covering two techniques for the same
+              problem supports Analyze and usually Evaluate. Report a ceiling of
+              Understand only when the topic is purely descriptive with no method,
+              no interacting parts, and no alternatives.
             - Set instructional_content_sufficient to false when the pages do not contain
               any meaningful explained instructional material. Do not reject merely
               because the excerpt cannot support Evaluate or Create questions.
@@ -362,7 +637,7 @@ class DocumentAnalyzer:
               axes, values, or components are readable and useful for a standalone question.
             - Reject logos, portraits, decorative artwork, page furniture, and unclear crops.
             """,
-            BinaryContent(data=pdf_path.read_bytes(), media_type="application/pdf"),
+            BinaryContent(data=pdf_bytes, media_type="application/pdf"),
         ]
         for asset in candidates:
             path = Path(asset.image_path)
@@ -381,7 +656,43 @@ class DocumentAnalyzer:
                     ),
                 ]
             )
-        result = await self.document_analysis_agent.run(content)
+        try:
+            result = await self.document_analysis_agent.run(content)
+        except Exception as exc:
+            if not _is_input_too_long_error(exc) or attached_pages <= 1:
+                raise
+            # Page/token estimates vary with diagrams and scan density. Bedrock
+            # is the final authority, so recover once with a substantially
+            # smaller, still evenly distributed attachment. The complete text
+            # chunk catalog remains in the request and preserves full coverage.
+            retry_limit = max(1, attached_pages // 2)
+            retry_pdf, retry_pages, _ = bounded_pdf_attachment(
+                pdf_path, page_limit=retry_limit
+            )
+            retry_note = (
+                f"\n            - The attached PDF is an evenly spaced sample of "
+                f"{retry_pages} pages from the {total_pages}-page selection, "
+                "reduced to fit the model context. The page text catalog below "
+                "is complete and authoritative.\n"
+            )
+            prompt = str(content[0])
+            content[0] = (
+                prompt.replace(sampling_note, retry_note)
+                if sampling_note
+                else f"{prompt}{retry_note}"
+            )
+            content[1] = BinaryContent(
+                data=retry_pdf, media_type="application/pdf"
+            )
+            logger.warning(
+                "ai.document_analysis.context_retry document_id=%s "
+                "attached_pages=%d retry_pages=%d total_pages=%d",
+                manifest.document_id,
+                attached_pages,
+                retry_pages,
+                total_pages,
+            )
+            result = await self.document_analysis_agent.run(content)
         if not result.output.instructional_content_sufficient:
             reason = (
                 result.output.insufficiency_reason
@@ -442,7 +753,15 @@ class DocumentAnalyzer:
             raise InsufficientInstructionalContent(
                 "selected pages contain no topics with verifiable instructional evidence"
             )
+        analyzed_assets = await self._verify_visual_assessments(
+            manifest=manifest,
+            content=content_map,
+            candidates=candidates,
+            assets=analyzed_assets,
+        )
         content_map = self._link_topics_to_assets(content_map, analyzed_assets)
+        content_map = self._enforce_topic_units(content_map, manifest)
+        content_map = self._enforce_course_outcomes(content_map, course_outcomes)
         logger.info(
             "ai.document_analysis.complete document_id=%s subject=%s topics=%d "
             "eligible_visuals=%d duration_seconds=%.2f model_calls=1",
@@ -454,7 +773,153 @@ class DocumentAnalyzer:
         )
         return content_map, analyzed_assets
 
-    async def analyze_content(self, manifest: DocumentManifest) -> ContentMap:
+    async def _verify_visual_assessments(
+        self,
+        *,
+        manifest: DocumentManifest,
+        content: ContentMap,
+        candidates: list[VisualAsset],
+        assets: list[VisualAsset],
+    ) -> list[VisualAsset]:
+        """Ground batch results and recover useful figures without trusting IDs.
+
+        Multimodal models occasionally describe the right image under a later
+        asset_id when several images share one request. A visual is therefore
+        accepted only when its own page and metadata match a source-grounded
+        topic. Unresolved candidates on instructional pages are then assessed
+        one image per request, where ID drift is impossible.
+        """
+        candidate_ids = {asset.asset_id for asset in candidates}
+        pages = {page.page_number: page for page in manifest.pages}
+        verified: list[VisualAsset] = []
+        unresolved: list[VisualAsset] = []
+
+        for asset in assets:
+            source_grounded = self._visual_matches_source_topic(asset, content)
+            if asset.question_eligible:
+                if not source_grounded:
+                    logger.warning(
+                        "ai.visual_analysis.batch_mismatch asset_id=%s "
+                        "page=%d topic=%s",
+                        asset.asset_id,
+                        asset.page_number,
+                        asset.topic or "unknown",
+                    )
+                asset = asset.model_copy(
+                    update={
+                        "question_eligible": False,
+                        "confidence": 0,
+                        "rejection_reason": (
+                            "batch assessment requires single-image verification"
+                            if source_grounded
+                            else "batch assessment did not match this asset's "
+                            "source page and topic"
+                        ),
+                    }
+                )
+            verified.append(asset)
+            if (
+                asset.asset_id in candidate_ids
+                and not asset.question_eligible
+                and self._page_has_source_topic(asset.page_number, content)
+            ):
+                unresolved.append(asset)
+
+        # Prefer candidates whose extraction metadata already names the topic,
+        # then larger figures. Keep recovery bounded for latency and cost.
+        unresolved.sort(
+            key=lambda asset: (
+                self._visual_matches_source_topic(asset, content),
+                self._visual_area(asset),
+            ),
+            reverse=True,
+        )
+        retry_limit = max(
+            0, int(os.getenv("MAX_VISUAL_REASSESSMENTS", "4"))
+        )
+        replacements: dict[str, VisualAsset] = {}
+        for asset in unresolved[:retry_limit]:
+            page = pages.get(asset.page_number)
+            if page is None:
+                continue
+            reassessed = await self._assess_single_visual(asset, page)
+            if reassessed.question_eligible and not self._visual_matches_source_topic(
+                reassessed, content
+            ):
+                reassessed = reassessed.model_copy(
+                    update={
+                        "question_eligible": False,
+                        "confidence": 0,
+                        "rejection_reason": (
+                            "individual assessment did not match the source topic"
+                        ),
+                    }
+                )
+            replacements[asset.asset_id] = reassessed
+
+        if replacements:
+            logger.info(
+                "ai.visual_analysis.individual_rechecks candidates=%d eligible=%d",
+                len(replacements),
+                sum(asset.question_eligible for asset in replacements.values()),
+            )
+        return [replacements.get(asset.asset_id, asset) for asset in verified]
+
+    async def _assess_single_visual(
+        self, asset: VisualAsset, page: PageContent
+    ) -> VisualAsset:
+        """Assess exactly one image so the result cannot bind to another ID."""
+        path = Path(asset.image_path)
+        if not path.exists():
+            return asset.model_copy(
+                update={
+                    "question_eligible": False,
+                    "confidence": 0,
+                    "rejection_reason": "visual file is missing",
+                }
+            )
+        prompt = f"""
+            Inspect the ONE attached visual extracted from original page
+            {asset.page_number} of an academic PDF. Your response applies only
+            to asset_id={asset.asset_id}; do not describe any other figure named
+            in the surrounding page context.
+
+            Caption: {asset.caption or ""}
+            Nearby text: {asset.nearby_text or page.text[:2500]}
+
+            It is question-eligible only when its own visible labels,
+            relationships, axes, values, or components are readable and useful
+            for a standalone examination question. Reject logos, institutional
+            banners, quotations, portraits, decoration, page furniture, and
+            unclear crops. Never infer labels that are not visible in the image.
+        """
+        result = await self.visual_agent.run(
+            [
+                prompt,
+                BinaryContent(
+                    data=path.read_bytes(), media_type=self._media_type(path)
+                ),
+            ]
+        )
+        assessment = result.output
+        return asset.model_copy(
+            update={
+                "asset_type": assessment.asset_type,
+                "visible_labels": assessment.visible_labels,
+                "topic": assessment.topic,
+                "question_eligible": (
+                    assessment.question_eligible and assessment.confidence >= 0.80
+                ),
+                "confidence": assessment.confidence,
+                "rejection_reason": assessment.rejection_reason,
+            }
+        )
+
+    async def analyze_content(
+        self,
+        manifest: DocumentManifest,
+        course_outcomes: list[str] | None = None,
+    ) -> ContentMap:
         started = time.perf_counter()
         logger.info(
             "ai.content_analysis.start document_id=%s pages=%d",
@@ -462,8 +927,51 @@ class DocumentAnalyzer:
             len(manifest.pages),
         )
         pdf_path = Path(manifest.source_pdf_path)
+        pdf_bytes, attached_pages, total_pages = bounded_pdf_attachment(pdf_path)
+        if attached_pages < total_pages:
+            logger.info(
+                "ai.document_analysis.pdf_sampled attached=%d of=%d limit=%d",
+                attached_pages,
+                total_pages,
+                max_attached_pdf_pages(),
+            )
+        sampling_note = (
+            ""
+            if attached_pages == total_pages
+            else (
+                f"\n            - The attached PDF is an evenly spaced sample of "
+                f"{attached_pages} pages from the {total_pages}-page selection, "
+                "because the provider accepts no more. The page text catalog "
+                "below is complete and authoritative; use the PDF only for "
+                "layout and figures, and never conclude a topic is absent merely "
+                "because its pages are not in the attachment.\n"
+            )
+        )
         chunk_catalog = self._content_chunk_catalog(manifest)
-        binary = BinaryContent(data=pdf_path.read_bytes(), media_type="application/pdf")
+        approved_outcomes = [
+            outcome.strip() for outcome in (course_outcomes or []) if outcome.strip()
+        ]
+        if approved_outcomes:
+            outcome_lines = "\n".join(
+                f"              CO{index}: {outcome}"
+                for index, outcome in enumerate(approved_outcomes, start=1)
+            )
+            outcome_instruction = (
+                "\n            - The department has approved these course outcomes. "
+                "For each topic, set course_outcomes to the ONE entry from this list "
+                "whose wording the topic's content actually serves, copied verbatim. "
+                "Choose nothing outside the list, never reword an entry, and leave "
+                "course_outcomes empty when no entry genuinely fits:\n"
+                f"{outcome_lines}\n"
+            )
+        else:
+            outcome_instruction = (
+                "\n            - Leave every topic's course_outcomes empty. Course "
+                "outcomes are approved by the department and cannot be inferred from "
+                "source material.\n"
+            )
+        pdf_bytes, _, _ = bounded_pdf_attachment(pdf_path)
+        binary = BinaryContent(data=pdf_bytes, media_type="application/pdf")
         result = await self.content_agent.run(
             [
                 f"""
@@ -704,12 +1212,24 @@ class DocumentAnalyzer:
               or assertion_reason.
             - If has_internal_choice is true, question_text must contain two complete
               and workload-equivalent alternatives separated by one standalone "OR".
+              When internal_choice_scope is whole_question, use EXACTLY this layout —
+              a line beginning "(a) ", then a line containing only "OR", then a line
+              beginning "(b) ". Write the separator as the bare word OR on its
+              own line; the paper renders it as the bracketed [OR] the college
+              prints. Each alternative is ONE self-contained task carrying
+              the slot's FULL marks: a student who answers (a) is marked out of all
+              of them. Never split an alternative into "(i)"/"(ii)" parts, never
+              write "Answer EITHER (i) OR (ii)", and never award marks per part.
               When internal_choice_scope is final_subpart, use EXACTLY this layout —
               the shared case paragraph, then lines beginning "(i) ", "(ii) ", and
               "(iii)(a) ", then a line containing only "OR", then a line beginning
-              "(iii)(b) ". Do not label the alternatives as bare "(a)"/"(b)" and do
-              not leave them unlabelled. Never start question_text with OR; otherwise
-              provide one task only.
+              "(iii)(b) ". Never start question_text with OR; otherwise provide one
+              task only.
+            - A question worth 2 marks or fewer must be a single direct instruction on
+              one line, answerable in about two minutes. Never give it a scenario, a
+              case paragraph, a named organisation, or multiple sub-questions — those
+              belong to the long-answer sections. Reserve original scenarios for
+              questions worth 5 marks or more.
             - For case_study slots, create an original real-world case, passage, dataset,
               table, or experimental situation followed by exactly three connected
               subquestions marked (i), (ii), and (iii), with marks 1, 1, and 2. The
@@ -805,9 +1325,19 @@ class DocumentAnalyzer:
             {evidence_text}
 
             Return exactly one review for every candidate_id. Check each question
-            independently for concept grounding, answer correctness, actual Bloom
-            reasoning level, clarity, marking logic, and visual consistency. Also
-            reject meaningful duplication within the section. For visual questions,
+            independently for concept grounding, answer correctness, clarity, marking
+            logic, and visual consistency. Also reject meaningful duplication within
+            the section.
+
+            Bloom level is reported, not enforced. For every question set
+            observed_bloom_level to the level it genuinely demands, judged from the
+            cognitive work a student must actually do — not from its verbs and not from
+            the level the question claims. Set bloom_level_correct to whether that
+            observed level equals the slot's locked bloom_level. A mismatch is recorded
+            for the faculty reviewer and never on its own makes a question defective: an
+            otherwise sound, well-grounded, correctly answered question is a PASS even
+            when it sits above or below its slot's level. Judge every other check
+            independently of it, and do not lower quality_score for a mismatch alone. For visual questions,
             set visual_necessary=false when the task is answerable without the image
             or the attached image is merely decorative or topically unrelated. In
             particular, set it false when every value and fact needed to solve the
@@ -923,6 +1453,11 @@ class DocumentAnalyzer:
               or assertion_reason.
             - For internal choices, provide two complete, workload-equivalent alternatives
               separated by exactly one standalone OR; never begin with OR. When the
+              scope is whole_question label them "(a) " and "(b) ", each a single
+              self-contained task carrying the slot's full marks — never split an
+              alternative into "(i)"/"(ii)" parts and never write "Answer EITHER (i)
+              OR (ii)". A question worth 2 marks or fewer must stay a single direct
+              instruction on one line, with no scenario and no sub-questions. When the
               locked scope is final_subpart, keep the shared case and parts (i) and (ii)
               once and put the OR only between alternatives (iii)(a) and (iii)(b).
             - A 5-mark question must require multi-step reasoning plus explanation or
@@ -951,9 +1486,11 @@ class DocumentAnalyzer:
             """
         ]
         if source_pdf_path:
-            path = Path(source_pdf_path)
             content.append(
-                BinaryContent(data=path.read_bytes(), media_type="application/pdf")
+                BinaryContent(
+                    data=bounded_pdf_attachment(source_pdf_path)[0],
+                    media_type="application/pdf",
+                )
             )
         for asset_id, visual_path in visual_paths:
             visual = Path(visual_path)
@@ -1002,11 +1539,20 @@ class DocumentAnalyzer:
             {evidence_text}
 
             Reject unsupported facts, ambiguous wording, wrong answers, incorrect
-            marking schemes, superficial Bloom verb matching, malformed student-facing
-            mathematical notation, disconnected case-study parts, and claims about
-            visual labels or relationships that are not visible. Verify only this
-            replacement; do not assume that a previous whole-paper finding was fixed.
-            Be conservative about concrete defects without enforcing stylistic preferences.
+            marking schemes, malformed student-facing mathematical notation,
+            disconnected case-study parts, and claims about visual labels or
+            relationships that are not visible. Verify only this replacement; do not
+            assume that a previous whole-paper finding was fixed. Be conservative about
+            concrete defects without enforcing stylistic preferences.
+
+            Bloom level is reported, not enforced. Always set observed_bloom_level to
+            the level the question genuinely demands, judged from the cognitive work a
+            student must actually do — not from its verbs and not from the level the
+            question claims. Set bloom_level_correct to whether that observed level
+            equals the required level. A mismatch is recorded for the faculty reviewer
+            and never on its own makes a question defective: an otherwise sound,
+            well-grounded, correctly answered question is a PASS even when it sits above
+            or below the required level. Judge every other check independently of it.
             """
         ]
         if visual_path:
@@ -1026,6 +1572,76 @@ class DocumentAnalyzer:
             result.output.confidence,
         )
         return result.output
+
+    @staticmethod
+    def _enforce_topic_units(
+        content: ContentMap,
+        manifest: DocumentManifest,
+    ) -> ContentMap:
+        """Set each topic's unit from the pages it came from.
+
+        When the faculty member uploads one file per unit we know exactly which
+        pages belong to which upload row, so the unit is computed rather than
+        inferred from chapter headings. Evidence chunk ownership is authoritative:
+        models sometimes cite the printed page number from each source PDF after
+        the files have been merged, making several uploads all look like pages
+        1-10. Only when a topic has no valid evidence chunks do source-page votes
+        provide the fallback.
+        """
+        page_units = {
+            page.page_number: page.unit
+            for page in manifest.pages
+            if page.unit
+        }
+        if not page_units:
+            return content
+        chunks = build_evidence_chunks(manifest)
+        topics = []
+        for topic in content.topics:
+            evidence_pages = [
+                chunks[chunk_id].page_number
+                for chunk_id in topic.evidence_chunk_ids
+                if chunk_id in chunks
+            ]
+            pages = evidence_pages or topic.source_pages
+            votes = Counter(page_units[page] for page in pages if page in page_units)
+            topics.append(
+                topic.model_copy(update={"unit": votes.most_common(1)[0][0]})
+                if votes
+                else topic
+            )
+        return content.model_copy(update={"topics": topics})
+
+    @staticmethod
+    def _enforce_course_outcomes(
+        content: ContentMap,
+        course_outcomes: list[str] | None,
+    ) -> ContentMap:
+        """Keep only outcomes the department actually approved.
+
+        Course outcomes are a governance artifact, not something derivable from a
+        textbook. `Topic.course_outcomes` is part of the analysis schema, so the
+        model fills it in whether or not the prompt asks — producing convincing
+        strings like "Learn the basics of NumPy arrays" that no Board of Studies
+        ever approved. Anything outside the supplied list is dropped here.
+        """
+        approved = [outcome.strip() for outcome in (course_outcomes or []) if outcome.strip()]
+        allowed = {outcome.casefold(): outcome for outcome in approved}
+        topics = [
+            topic.model_copy(
+                update={
+                    "course_outcomes": [
+                        allowed[candidate.strip().casefold()]
+                        for candidate in topic.course_outcomes
+                        if candidate.strip().casefold() in allowed
+                    ]
+                }
+            )
+            for topic in content.topics
+        ]
+        return content.model_copy(
+            update={"course_outcomes": approved, "topics": topics}
+        )
 
     @staticmethod
     def _normalize_content_pages(
@@ -1101,7 +1717,11 @@ class DocumentAnalyzer:
         chunks = list(build_evidence_chunks(manifest).values())
         if not chunks:
             return "No extractable evidence chunks."
-        preview_size = max(160, min(500, 100000 // len(chunks)))
+        # The catalog lists every chunk id so no page is invisible, but the
+        # previews share a bounded budget: at 100k characters it was consuming a
+        # quarter of the context window on its own.
+        catalog_budget = _env_int("CHUNK_CATALOG_CHARS", 40_000)
+        preview_size = max(120, min(500, catalog_budget // len(chunks)))
         return "\n\n".join(
             f"[chunk_id={chunk.chunk_id} original_page={chunk.page_number}]\n"
             f"{chunk.text[:preview_size]}"
@@ -1142,6 +1762,25 @@ class DocumentAnalyzer:
                 topic.model_copy(update={"visual_asset_ids": list(dict.fromkeys(linked))})
             )
         return content.model_copy(update={"topics": topics})
+
+    @staticmethod
+    def _page_has_source_topic(page_number: int, content: ContentMap) -> bool:
+        return any(page_number in topic.source_pages for topic in content.topics)
+
+    @staticmethod
+    def _visual_matches_source_topic(
+        asset: VisualAsset, content: ContentMap
+    ) -> bool:
+        return any(
+            asset.page_number in topic.source_pages
+            and DocumentAnalyzer._visual_matches_topic(asset, topic)
+            for topic in content.topics
+        )
+
+    @staticmethod
+    def _visual_area(asset: VisualAsset) -> float:
+        box = asset.bounding_box
+        return (box.x1 - box.x0) * (box.y1 - box.y0) if box else 0
 
     @staticmethod
     def _visual_matches_topic(asset: VisualAsset, topic: Topic) -> bool:
@@ -1185,10 +1824,6 @@ class DocumentAnalyzer:
         if not limit:
             return []
 
-        def area(asset: VisualAsset) -> float:
-            box = asset.bounding_box
-            return (box.x1 - box.x0) * (box.y1 - box.y0) if box else 0
-
         candidates = [
             asset
             for asset in manifest.visual_assets
@@ -1196,7 +1831,10 @@ class DocumentAnalyzer:
         ]
         return sorted(
             candidates,
-            key=lambda asset: (area(asset), len(asset.nearby_text or "")),
+            key=lambda asset: (
+                DocumentAnalyzer._visual_area(asset),
+                len(asset.nearby_text or ""),
+            ),
             reverse=True,
         )[:limit]
 

@@ -261,9 +261,10 @@ def test_one_step_five_mark_alternative_is_rejected() -> None:
         candidate_id="q1",
         slot_id=slot.slot_id,
         question_text=(
-            "Find the remainder when 226 multiplied by 369 is divided by 8.\n"
+            "(a) Find the remainder when 226 multiplied by 369 is divided by 8.\n"
             "OR\n"
-            "Evaluate the modular result and verify every step using the supplied rules."
+            "(b) Evaluate the modular result and verify every step using the "
+            "supplied rules."
         ),
         answer="A complete calculation.",
         marks=5,
@@ -817,3 +818,134 @@ def test_self_contained_questions_pass_the_meta_reference_gate() -> None:
     result = QuestionValidator().validate(_slot(), candidate, _manifest())
 
     assert "meta_reference" not in {finding.code for finding in result.findings}
+
+
+def test_whole_question_choice_must_be_labelled_a_and_b() -> None:
+    """Part B alternatives are (a) and (b); unlabelled text is a defect."""
+    slot = _slot().model_copy(
+        update={
+            "marks": 13,
+            "question_kind": QuestionKind.LONG_ANSWER,
+            "has_internal_choice": True,
+            "choices_per_question": 2,
+            "internal_choice_scope": "whole_question",
+        }
+    )
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id=slot.slot_id,
+        question_text=(
+            "Explain the normalization process and justify each decomposition step.\n"
+            "OR\n"
+            "Compare two decompositions and recommend one with full reasoning."
+        ),
+        answer="A complete answer.",
+        marks=13,
+        bloom_level=slot.bloom_level,
+        bloom_justification="Applies the method.",
+        marking_scheme=[MarkingCriterion(criterion="Complete response", marks=13)],
+        evidence=SourceEvidence(
+            page_numbers=[1], excerpts=["Normalization source."]
+        ),
+        confidence=0.90,
+    )
+
+    result = QuestionValidator().validate(slot, candidate, _manifest())
+
+    assert "unlabelled_internal_choice" in {f.code for f in result.findings}
+    assert not result.accepted
+
+
+def test_part_b_choice_must_not_be_split_into_subparts() -> None:
+    """A student answering (a) is marked out of 13, not a 7/6 breakdown."""
+    slot = _slot().model_copy(
+        update={
+            "marks": 13,
+            "question_kind": QuestionKind.LONG_ANSWER,
+            "has_internal_choice": True,
+            "choices_per_question": 2,
+            "internal_choice_scope": "whole_question",
+        }
+    )
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id=slot.slot_id,
+        question_text=(
+            "Answer EITHER (i) OR (ii):\n"
+            "(i) Explain the normalization process and justify each step.\n"
+            "OR\n"
+            "(ii) Compare two decompositions and recommend one with reasoning."
+        ),
+        answer="A complete answer.",
+        marks=13,
+        bloom_level=slot.bloom_level,
+        bloom_justification="Applies the method.",
+        marking_scheme=[MarkingCriterion(criterion="Complete response", marks=13)],
+        evidence=SourceEvidence(
+            page_numbers=[1], excerpts=["Normalization source."]
+        ),
+        confidence=0.90,
+    )
+
+    result = QuestionValidator().validate(slot, candidate, _manifest())
+
+    assert "internal_choice_split_into_subparts" in {
+        f.code for f in result.findings
+    }
+    assert not result.accepted
+
+
+def test_a_two_mark_question_must_stay_one_instruction() -> None:
+    """The college's own two-markers run 5-20 words; a scenario is a defect."""
+    slot = _slot().model_copy(
+        update={"marks": 2, "question_kind": QuestionKind.VERY_SHORT_ANSWER}
+    )
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id=slot.slot_id,
+        question_text=(
+            "A convolutional layer receives data with shape (channels, height, "
+            "width), whereas a fully connected layer flattens this into a single "
+            "vector of values. Explain what information is lost by flattening and "
+            "describe why a convolution layer preserves the spatial structure of "
+            "the input data across its operations."
+        ),
+        answer="Spatial structure is lost.",
+        marks=2,
+        bloom_level=slot.bloom_level,
+        bloom_justification="Recall.",
+        marking_scheme=[MarkingCriterion(criterion="Correct response", marks=2)],
+        evidence=SourceEvidence(
+            page_numbers=[1], excerpts=["Normalization source."]
+        ),
+        confidence=0.90,
+    )
+
+    result = QuestionValidator().validate(slot, candidate, _manifest())
+
+    assert "short_question_too_long" in {f.code for f in result.findings}
+    assert not result.accepted
+
+
+def test_a_concise_two_mark_question_passes() -> None:
+    slot = _slot().model_copy(
+        update={"marks": 2, "question_kind": QuestionKind.VERY_SHORT_ANSWER}
+    )
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id=slot.slot_id,
+        question_text="Define a self-referential structure and give one example.",
+        answer="A structure containing a pointer to its own type.",
+        marks=2,
+        bloom_level=slot.bloom_level,
+        bloom_justification="Recall.",
+        marking_scheme=[MarkingCriterion(criterion="Correct response", marks=2)],
+        evidence=SourceEvidence(
+            page_numbers=[1], excerpts=["Normalization source."]
+        ),
+        confidence=0.90,
+    )
+
+    result = QuestionValidator().validate(slot, candidate, _manifest())
+
+    assert "short_question_too_long" not in {f.code for f in result.findings}

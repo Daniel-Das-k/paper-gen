@@ -20,6 +20,7 @@ from .ai import (
 from .blueprints import FACET_CYCLE
 from .evidence import attach_verified_evidence, build_evidence_chunks
 from .models import (
+    BloomLevel,
     BlueprintSlot,
     ContentMap,
     DocumentManifest,
@@ -34,6 +35,7 @@ from .models import (
     ValidationFinding,
     ValidationSeverity,
 )
+from .blueprints import BlueprintBuilder
 from .validation import QuestionValidator, find_duplicate_questions
 from .subject_profiles import infer_subject_profile
 
@@ -87,6 +89,7 @@ class PaperGenerationPipeline:
         content_map: ContentMap,
         manifest: DocumentManifest,
         blueprint: PaperBlueprint,
+        set_label: str | None = None,
     ) -> ExamPaper:
         sections: OrderedDict[str, list[BlueprintSlot]] = OrderedDict()
         for slot in blueprint.slots:
@@ -221,6 +224,7 @@ class PaperGenerationPipeline:
 
         paper = ExamPaper(
             title=f"{content_map.subject} Academic Examination",
+            set_label=set_label,
             subject=content_map.subject,
             subject_family=subject_profile.family.value,
             duration_minutes=pattern.duration_minutes,
@@ -379,9 +383,15 @@ class PaperGenerationPipeline:
                             "attempt": attempt,
                             "defect_codes": defect_codes,
                             "repair_focus": (
-                                "the previous question duplicated another question "
-                                "in the paper; produce a task testing a DIFFERENT "
-                                "skill or fact, following the slot facet"
+                                "the slot's topic has been REPLACED because the "
+                                "previous specification could not be satisfied; "
+                                "ignore the earlier question's subject matter and "
+                                "write a fresh question on the new locked topic, "
+                                "grounded only in the evidence chunks below"
+                                if active_slot.topic_id != slot.topic_id
+                                else "the previous question duplicated another "
+                                "question in the paper; produce a task testing a "
+                                "DIFFERENT skill or fact, following the slot facet"
                                 if "duplicate_question" in defect_codes
                                 else (
                                     "the question MUST contain exactly four "
@@ -528,6 +538,156 @@ class PaperGenerationPipeline:
             sum(not question.accepted for question in selected_questions),
         )
         return selected_questions
+
+    async def regenerate_question(
+        self,
+        *,
+        slot: BlueprintSlot,
+        current_question: ValidatedQuestion,
+        mode: str,
+        faculty_comment: str,
+        other_question_texts: list[str],
+        content_map: ContentMap,
+        manifest: DocumentManifest,
+    ) -> ValidatedQuestion:
+        """Regenerate one faculty-selected question without changing its blueprint slot.
+
+        This is intentionally narrower than the automatic paper repair pass: faculty
+        regeneration may improve wording or choose a different task, but it must not
+        silently move the question to another topic, mark value, or cognitive level.
+        """
+        evidence_chunks = build_evidence_chunks(manifest)
+        permitted_ids = [
+            chunk_id
+            for chunk_id in slot.evidence_chunk_ids
+            if chunk_id in evidence_chunks
+        ]
+        if not permitted_ids:
+            permitted_ids = [
+                chunk.chunk_id
+                for chunk in evidence_chunks.values()
+                if chunk.page_number in slot.source_pages
+            ]
+        if not permitted_ids:
+            raise ValueError("the question's blueprint slot has no usable source evidence")
+
+        self._pipeline_started_at = time.perf_counter()
+        self._completed_model_calls = 0
+        self._planned_model_calls = 6
+        if mode not in {"guided", "fresh"}:
+            raise ValueError("regeneration mode must be guided or fresh")
+        current = current_question
+        visual_paths = self._section_visuals([slot], manifest)
+
+        for attempt in range(1, 4):
+            payload: dict[str, object] = {
+                    "attempt": attempt,
+                    "regeneration_mode": mode,
+                    "repair_focus": (
+                        "Write a completely fresh question. Do not reuse, paraphrase, "
+                        "or take inspiration from the previous question; use only the "
+                        "locked blueprint and permitted source evidence."
+                        if mode == "fresh"
+                        else (
+                            "Replace this one question by following the faculty instruction "
+                            "and correcting every automated-review finding. The faculty "
+                            "instruction may refine wording or the assessed task, but it "
+                            "cannot override the locked blueprint or source evidence."
+                        )
+                    ),
+                    "locked_slots": [slot.model_dump(mode="json")],
+                    "other_question_texts_to_avoid": (
+                        other_question_texts + [current_question.candidate.question_text]
+                        if mode == "fresh"
+                        else other_question_texts
+                    ),
+                    "available_evidence_chunks": [
+                        {
+                            "chunk_id": evidence_chunks[chunk_id].chunk_id,
+                            "original_page": evidence_chunks[chunk_id].page_number,
+                            "text": evidence_chunks[chunk_id].text,
+                        }
+                        for chunk_id in permitted_ids[:3]
+                    ],
+                }
+            if mode == "guided":
+                payload["faculty_instruction"] = faculty_comment.strip()
+                payload["question_being_replaced"] = {
+                    "candidate": current.candidate.model_dump(mode="json"),
+                    "findings": [
+                        finding.model_dump(mode="json")
+                        for finding in current.findings
+                    ],
+                }
+            payload_text = json.dumps(
+                payload,
+                indent=2,
+            )
+            batch = await self._call_with_provider_backoff(
+                operation="faculty_question_regeneration",
+                section_id=slot.slot_id,
+                call=lambda payload_text=payload_text: self.analyzer.repair_questions(
+                    repair_prompt=payload_text,
+                    expected_question_count=1,
+                    source_pdf_path=None,
+                    selected_page_start=manifest.selected_page_start,
+                    selected_page_end=manifest.selected_page_end,
+                    visual_paths=visual_paths,
+                ),
+            )
+            candidates, missing = self._normalize_candidates(
+                batch=batch,
+                slots=[slot],
+                content_map=content_map,
+                manifest=manifest,
+            )
+            deterministic = self.validator.validate(slot, candidates[0], manifest)
+            if slot.slot_id in missing:
+                deterministic = self._append_finding(
+                    deterministic,
+                    code="missing_repair_candidate",
+                    message="regeneration did not return a replacement for this question",
+                )
+            review = await self._call_with_provider_backoff(
+                operation="faculty_question_regeneration_review",
+                section_id=slot.slot_id,
+                call=lambda candidate=candidates[0]: self.analyzer.review_question(
+                    question=candidate,
+                    required_bloom_level=slot.bloom_level,
+                    evidence_text=self._section_evidence(
+                        [slot], content_map, manifest
+                    ),
+                    visual_path=visual_paths[0][1] if visual_paths else None,
+                ),
+            )
+            current = self._apply_semantic_review(deterministic, review)
+
+            comparison_questions = [current]
+            for index, text in enumerate(other_question_texts):
+                comparison_questions.append(
+                    current.model_copy(
+                        update={
+                            "candidate": current.candidate.model_copy(
+                                update={
+                                    "candidate_id": f"existing-question-{index}",
+                                    "question_text": text,
+                                }
+                            )
+                        }
+                    )
+                )
+            duplicates = find_duplicate_questions(comparison_questions)
+            duplicate_ids = {
+                candidate_id
+                for candidate_ids in duplicates.values()
+                for candidate_id in candidate_ids
+            }
+            if current.candidate.candidate_id in duplicate_ids:
+                current = self._append_duplicate_finding(current)
+            if not self._needs_improvement(current):
+                break
+
+        return current
 
     async def _generate_and_review_section(
         self,
@@ -1166,7 +1326,6 @@ class PaperGenerationPipeline:
         checks = {
             "not_grounded": review.grounded_in_evidence,
             "incorrect_answer": review.answer_correct,
-            "incorrect_bloom_level": review.bloom_level_correct,
             "unclear_wording": review.wording_clear,
             "visual_inconsistency": review.visual_consistent,
             "subject_accuracy": review.subject_accuracy,
@@ -1229,6 +1388,38 @@ class PaperGenerationPipeline:
                     ),
                 )
             )
+        requested_bloom = deterministic.candidate.bloom_level
+        observed_bloom = review.observed_bloom_level
+        if observed_bloom is None and not review.bloom_level_correct:
+            # Reviewer flagged a mismatch without naming the level it saw; keep the
+            # signal rather than silently recording the question as on-target.
+            findings.append(
+                ValidationFinding(
+                    code="bloom_level_unverified",
+                    severity=ValidationSeverity.WARNING,
+                    message=(
+                        f"reviewer disputed the {requested_bloom.value} level but did "
+                        "not report the level it observed"
+                    ),
+                )
+            )
+        elif observed_bloom is not None and observed_bloom != requested_bloom:
+            levels = list(BloomLevel)
+            distance = levels.index(observed_bloom) - levels.index(requested_bloom)
+            steps = abs(distance)
+            findings.append(
+                ValidationFinding(
+                    code="bloom_level_deviation",
+                    severity=ValidationSeverity.WARNING,
+                    message=(
+                        f"question demands {observed_bloom.value}, "
+                        f"{steps} step{'' if steps == 1 else 's'} "
+                        f"{'above' if distance > 0 else 'below'} the "
+                        f"{requested_bloom.value} level the blueprint requested; "
+                        "reported for faculty review, not a defect"
+                    ),
+                )
+            )
         return deterministic.model_copy(
             update={
                 "accepted": deterministic.accepted
@@ -1238,6 +1429,7 @@ class PaperGenerationPipeline:
                 ),
                 "findings": deterministic.findings + findings,
                 "quality_score": review.quality_score,
+                "observed_bloom_level": observed_bloom,
             }
         )
 
@@ -1268,7 +1460,15 @@ class PaperGenerationPipeline:
             return slot.model_copy(
                 update={"facet": FACET_CYCLE[(facet_index + 2) % len(FACET_CYCLE)]}
             )
-        topic = max(alternates, key=lambda item: len(item.evidence_chunk_ids))
+        # Spread swaps across the alternates instead of sending every slot in the
+        # paper to whichever topic happens to hold the most chunks — that collapse
+        # both defeats the facet cycle's duplicate defence and buries one topic.
+        ranked = sorted(
+            alternates,
+            key=lambda item: (-len(item.evidence_chunk_ids), item.topic_id),
+        )
+        offset = sum(ord(character) for character in slot.slot_id)
+        topic = ranked[offset % len(ranked)]
         return slot.model_copy(
             update={
                 "topic_id": topic.topic_id,
@@ -1457,3 +1657,61 @@ class PaperGenerationPipeline:
                 "findings": question.findings + [finding],
             }
         )
+
+
+async def generate_paper_sets(
+    *,
+    analyzer: "DocumentAnalyzer",
+    pattern: PaperPattern,
+    content_map: ContentMap,
+    manifest: DocumentManifest,
+    set_count: int,
+) -> tuple[list[tuple[PaperBlueprint, ExamPaper]], list[str]]:
+    """Generate interchangeable sets of one paper, plus any cross-set duplicates.
+
+    Exam cells hand out several sets of the same paper so neighbours cannot copy.
+    The sets must be equivalent — same topics, marks, cognitive levels and outcome
+    coverage — while asking different questions, so each set is planned from the
+    same content map with its facet cycle offset. Sets are generated sequentially
+    because each is checked against the ones before it.
+
+    Returns the (blueprint, paper) pairs and a warning per question that repeats
+    across sets, which no single paper's duplicate detector can see.
+    """
+    if set_count < 1:
+        raise ValueError("set_count must be at least 1")
+    results: list[tuple[PaperBlueprint, ExamPaper]] = []
+    for index in range(set_count):
+        blueprint = BlueprintBuilder().build(
+            pattern, content_map, manifest, set_index=index
+        )
+        label = chr(ord("A") + index) if set_count > 1 else None
+        paper = await PaperGenerationPipeline(analyzer).generate(
+            pattern=pattern,
+            content_map=content_map,
+            manifest=manifest,
+            blueprint=blueprint,
+            set_label=label,
+        )
+        results.append((blueprint, paper))
+        logger.info(
+            "paper.sets.generated set=%s accepted=%d total=%d",
+            label or "-",
+            sum(question.accepted for question in paper.questions),
+            len(paper.questions),
+        )
+
+    warnings: list[str] = []
+    if len(results) > 1:
+        combined = [
+            question for _, paper in results for question in paper.questions
+        ]
+        for stem, candidate_ids in find_duplicate_questions(combined).items():
+            owners = sorted(
+                {identifier.split("-", 1)[0] for identifier in candidate_ids}
+            )
+            warnings.append(
+                f"the same question appears in more than one set "
+                f"({', '.join(owners)}): {stem[:80]}"
+            )
+    return results, warnings

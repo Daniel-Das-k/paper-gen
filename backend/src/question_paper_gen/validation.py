@@ -18,6 +18,20 @@ from .models import (
 )
 
 
+#: Question kinds whose text necessarily carries options or a stem-and-reason
+#: pair, so a word ceiling would be meaningless.
+OBJECTIVE_QUESTION_KINDS = frozenset(
+    {QuestionKind.MULTIPLE_CHOICE, QuestionKind.ASSERTION_REASON}
+)
+
+#: Marks at or below which a prose question must be a single direct instruction.
+SHORT_ANSWER_MAX_MARKS = 2
+
+#: Word ceiling for such a question. The college's own two-markers run 5-20
+#: words; this leaves room without admitting a scenario.
+SHORT_ANSWER_MAX_WORDS = 35
+
+
 class QuestionValidator:
     """Deterministic gates; semantic/grounding reviewers plug in after these."""
 
@@ -369,6 +383,25 @@ class QuestionValidator:
                     "unexpected_mcq_format",
                     "non-objective slot contains a multiple-choice question",
                 )
+        # A two-mark question is answered in about two minutes. The reference
+        # papers run 5 to 20 words ("Define a self-referential structure."); a
+        # 45-word scenario is a long-answer question wearing a 2-mark label, and
+        # the prompt rule alone did not hold.
+        # Objective formats carry their options in the question text and are
+        # long by construction; the rule is about prose short-answer questions.
+        if (
+            slot.marks <= SHORT_ANSWER_MAX_MARKS
+            and slot.question_kind not in OBJECTIVE_QUESTION_KINDS
+        ):
+            words = len(candidate.question_text.split())
+            if words > SHORT_ANSWER_MAX_WORDS:
+                error(
+                    "short_question_too_long",
+                    f"a {slot.marks}-mark question runs {words} words; keep it to "
+                    f"one direct instruction under {SHORT_ANSWER_MAX_WORDS} words "
+                    "with no scenario",
+                )
+
         alternatives = re.split(
             r"(?im)^\s*OR\s*$",
             candidate.question_text,
@@ -397,6 +430,26 @@ class QuestionValidator:
                     error(
                         "invalid_scoped_internal_choice",
                         "case-study choice must be between subparts (iii)(a) and (iii)(b)",
+                    )
+            elif slot.internal_choice_scope == "whole_question":
+                # Each alternative is one task worth the slot's full marks. The
+                # model otherwise reaches for "Answer EITHER (i) OR (ii)", which
+                # turns the choice into a subpart split and misstates the marks.
+                if not re.search(r"^\s*\(a\)", nonempty[0], re.MULTILINE) or (
+                    not re.search(r"^\s*\(b\)", nonempty[1], re.MULTILINE)
+                ):
+                    error(
+                        "unlabelled_internal_choice",
+                        "the two alternatives must be labelled (a) and (b)",
+                    )
+                if re.search(
+                    r"(?i)\bEITHER\b.*\(i+\)|answer\s+either\s*\(i\)",
+                    candidate.question_text,
+                ):
+                    error(
+                        "internal_choice_split_into_subparts",
+                        "the choice is between (a) and (b); an alternative carries "
+                        "the full marks and must not be split into (i)/(ii) parts",
                     )
             elif min(len(part.split()) for part in nonempty) > 0:
                 first_task = re.split(

@@ -1,249 +1,313 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { AppHeader } from "../components/layout/AppHeader";
-import { ChevronIcon, FileIcon, SparkIcon } from "../components/icons/Icons";
+import {
+  AppHeader,
+  type DemoView,
+} from "../components/layout/AppHeader";
+import { DemoDashboard } from "../components/demo/DemoDashboard";
+import { PaperListPage } from "../components/demo/PaperListPage";
 import { WorkflowResultPanel } from "../components/results/WorkflowResultPanel";
-import { UploadPanel } from "../components/upload/UploadPanel";
-import { runWorkflow } from "../services/api";
-import type { FullWorkflowResponse } from "../types/api";
+import { PAPER_PATTERNS, UploadPanel } from "../components/upload/UploadPanel";
+import {
+  createDemoGenerationJob,
+  getDemoJob,
+  getDemoPaper,
+  listDemoPapers,
+  type DemoExamDetails,
+} from "../services/api";
+import type {
+  DemoJob,
+  DemoPaperRecord,
+  DemoPaperSummary,
+  DemoRole,
+  UnitUpload,
+} from "../types/api";
 
-interface RecentPaper {
-  id: string;
-  filename: string;
-  subject: string;
-  pageRange: string;
-  createdAt: string;
+type PatternId = (typeof PAPER_PATTERNS)[number]["id"];
+
+interface ExamWorkspace {
+  unitUploads: UnitUpload[];
+  setCount: number;
+  error: string | null;
 }
 
-const HISTORY_KEY = "paperly-recent-papers";
+const PATTERN_UNITS: Record<PatternId, string[]> = {
+  "cat-1-75": ["1", "2", "3"],
+  "cat-2-75": ["3", "4", "5"],
+  "autonomous-semester-100": ["1", "2", "3", "4", "5"],
+};
 
-function greeting() {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
+const EMPTY_DETAILS: DemoExamDetails = {
+  courseCode: "",
+  courseName: "",
+  year: "",
+  semester: "",
+  examDate: "",
+};
+
+function createUnitUploads(patternId: PatternId): UnitUpload[] {
+  return PATTERN_UNITS[patternId].map((unit) => ({
+    unit,
+    file: null,
+    startPage: "",
+    endPage: "",
+  }));
 }
 
-function readHistory(): RecentPaper[] {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]") as RecentPaper[];
-  } catch {
-    return [];
-  }
+function createExamWorkspaces(): Record<PatternId, ExamWorkspace> {
+  return Object.fromEntries(
+    PAPER_PATTERNS.map((pattern) => [
+      pattern.id,
+      {
+        unitUploads: createUnitUploads(pattern.id),
+        setCount: 1,
+        error: null,
+      },
+    ]),
+  ) as Record<PatternId, ExamWorkspace>;
 }
 
-export function DashboardPage() {
-  const [file, setFile] = useState<File | null>(null);
-  const [startPage, setStartPage] = useState("");
-  const [endPage, setEndPage] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<FullWorkflowResponse | null>(null);
-  const [history, setHistory] = useState<RecentPaper[]>(readHistory);
-  const uploadRef = useRef<HTMLDivElement>(null);
+interface DashboardPageProps {
+  onExitDemo: () => void;
+}
 
-  useEffect(() => {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  }, [history]);
-
-  const actionLabel = useMemo(
-    () => (result ? "Create another paper" : "Start with your notes"),
-    [result],
+export function DashboardPage({ onExitDemo }: DashboardPageProps) {
+  const [view, setView] = useState<DemoView>("dashboard");
+  const [role, setRole] = useState<DemoRole>("faculty");
+  const [patternId, setPatternId] = useState<PatternId>(
+    "autonomous-semester-100",
   );
+  const [courseOutcomes, setCourseOutcomes] = useState<string[]>([]);
+  const [examDetails, setExamDetails] = useState<DemoExamDetails>(EMPTY_DETAILS);
+  const [workspaces, setWorkspaces] = useState(createExamWorkspaces);
+  const [job, setJob] = useState<DemoJob | null>(null);
+  const [record, setRecord] = useState<DemoPaperRecord | null>(null);
+  const [papers, setPapers] = useState<DemoPaperSummary[]>([]);
+  const [papersLoading, setPapersLoading] = useState(false);
+  const [papersError, setPapersError] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const workspace = workspaces[patternId];
+  const loading = job?.status === "queued" || job?.status === "running";
 
-  const reset = () => {
-    setFile(null);
-    setError(null);
-    setResult(null);
-    setStartPage("");
-    setEndPage("");
-    requestAnimationFrame(() =>
-      uploadRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
+  const updateWorkspace = (
+    target: PatternId,
+    patch: Partial<ExamWorkspace>,
+  ) => {
+    setWorkspaces((current) => ({
+      ...current,
+      [target]: { ...current[target], ...patch },
+    }));
   };
 
-  const executeWorkflow = async () => {
-    if (!file) return;
-    const numericStart = startPage.trim() ? Number(startPage) : undefined;
-    const numericEnd = endPage.trim() ? Number(endPage) : undefined;
-    if (
-      (numericStart !== undefined &&
-        (!Number.isInteger(numericStart) || numericStart < 1)) ||
-      (numericEnd !== undefined &&
-        (!Number.isInteger(numericEnd) || numericEnd < 1)) ||
-      (numericStart !== undefined &&
-        numericEnd !== undefined &&
-        numericEnd < numericStart)
-    ) {
-      setError("Enter a valid page range, or leave both page fields empty.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
+  const loadPapers = useCallback(async () => {
+    setPapersLoading(true);
+    setPapersError(null);
     try {
-      const workflowResult = await runWorkflow(file, {
-        startPage: numericStart,
-        endPage: numericEnd,
-      });
-      setResult(workflowResult);
-      setHistory((current) =>
-        [
-          {
-            id: workflowResult.manifest.document_id,
-            filename: file.name,
-            subject: workflowResult.content_map.subject,
-            pageRange: `${workflowResult.manifest.selected_page_start}–${workflowResult.manifest.selected_page_end}`,
-            createdAt: new Date().toISOString(),
-          },
-          ...current.filter(
-            (item) => item.id !== workflowResult.manifest.document_id,
-          ),
-        ].slice(0, 6),
-      );
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "The workflow could not be completed.",
+      setPapers(await listDemoPapers());
+    } catch (cause) {
+      setPapersError(
+        cause instanceof Error ? cause.message : "Could not load local papers.",
       );
     } finally {
-      setLoading(false);
+      setPapersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view !== "create") void loadPapers();
+  }, [loadPapers, view]);
+
+  useEffect(
+    () => () => {
+      if (pollRef.current !== null) window.clearTimeout(pollRef.current);
+    },
+    [],
+  );
+
+  const openPaper = async (paperId: string) => {
+    setPapersError(null);
+    try {
+      const loaded = await getDemoPaper(paperId);
+      setRecord(loaded);
+      setView("create");
+    } catch (cause) {
+      setPapersError(
+        cause instanceof Error ? cause.message : "Could not open the paper.",
+      );
     }
   };
 
-  const submit = () => executeWorkflow();
+  const pollJob = async (jobId: string) => {
+    try {
+      const next = await getDemoJob(jobId);
+      setJob(next);
+      if (next.status === "completed" && next.paper_id) {
+        setRecord(await getDemoPaper(next.paper_id));
+        await loadPapers();
+        return;
+      }
+      if (next.status === "failed") {
+        updateWorkspace(patternId, {
+          error: next.error ?? "The generation could not be completed.",
+        });
+        return;
+      }
+      pollRef.current = window.setTimeout(() => void pollJob(jobId), 1500);
+    } catch (cause) {
+      updateWorkspace(patternId, {
+        error:
+          cause instanceof Error
+            ? cause.message
+            : "Could not read generation progress.",
+      });
+      setJob(null);
+    }
+  };
+
+  const generate = async () => {
+    const requestedPattern = patternId;
+    const requested = workspaces[requestedPattern];
+    const missing = requested.unitUploads
+      .filter((upload) => upload.file === null)
+      .map((upload) => upload.unit);
+    if (missing.length) {
+      updateWorkspace(requestedPattern, {
+        error: `Choose a PDF for unit${missing.length === 1 ? "" : "s"} ${missing.join(", ")}.`,
+      });
+      return;
+    }
+    const invalidRange = requested.unitUploads.find((upload) => {
+      const start = upload.startPage ? Number(upload.startPage) : undefined;
+      const end = upload.endPage ? Number(upload.endPage) : undefined;
+      return (
+        (start !== undefined && (!Number.isInteger(start) || start < 1)) ||
+        (end !== undefined && (!Number.isInteger(end) || end < 1)) ||
+        (start !== undefined && end !== undefined && end < start)
+      );
+    });
+    if (invalidRange) {
+      updateWorkspace(requestedPattern, {
+        error: `Enter a valid page range for unit ${invalidRange.unit}.`,
+      });
+      return;
+    }
+
+    updateWorkspace(requestedPattern, { error: null });
+    setRecord(null);
+    try {
+      const started = await createDemoGenerationJob(
+        requested.unitUploads.map((upload) => ({
+          unit: upload.unit,
+          file: upload.file as File,
+          startPage: upload.startPage ? Number(upload.startPage) : undefined,
+          endPage: upload.endPage ? Number(upload.endPage) : undefined,
+        })),
+        requestedPattern,
+        courseOutcomes.filter((outcome) => outcome.trim()),
+        requested.setCount,
+        examDetails,
+      );
+      setJob(started);
+      void pollJob(started.id);
+    } catch (cause) {
+      updateWorkspace(requestedPattern, {
+        error:
+          cause instanceof Error ? cause.message : "Could not start generation.",
+      });
+      setJob(null);
+    }
+  };
+
+  const startNew = () => {
+    setRecord(null);
+    setJob(null);
+    updateWorkspace(patternId, {
+      unitUploads: createUnitUploads(patternId),
+      error: null,
+    });
+    setView("create");
+  };
 
   return (
-    <div className="app-shell">
-      <AppHeader onNewPaper={reset} />
+    <div className="app-shell demo-shell">
+      <AppHeader
+        onExitDemo={onExitDemo}
+        onRoleChange={setRole}
+        onViewChange={setView}
+        role={role}
+        view={view}
+      />
 
-      <main>
-        <section className="welcome-band">
-          <div className="page-container welcome-content">
+      {view === "dashboard" ? (
+        <DemoDashboard
+          error={papersError}
+          job={job}
+          loading={papersLoading}
+          onCreate={startNew}
+          onOpen={(paperId) => void openPaper(paperId)}
+          onQueue={() => setView("queue")}
+          onRefresh={() => void loadPapers()}
+          papers={papers}
+          role={role}
+        />
+      ) : view === "queue" || view === "history" ? (
+        <PaperListPage
+          error={papersError}
+          loading={papersLoading}
+          mode={view}
+          onOpen={(paperId) => void openPaper(paperId)}
+          onRefresh={() => void loadPapers()}
+          papers={papers}
+          role={role}
+        />
+      ) : record ? (
+        <main className="demo-page page-container">
+          <WorkflowResultPanel
+            key={record.id}
+            onRecordChange={setRecord}
+            onReset={startNew}
+            record={record}
+            role={role}
+          />
+        </main>
+      ) : (
+        <main className="demo-page page-container">
+          <div className="demo-page-heading">
             <div>
-              <h1>{greeting()}</h1>
-              <p>Turn course notes into a balanced, faculty-reviewable paper.</p>
+              <h1>Create a question paper</h1>
+              <p>
+                Select the examination, add its course material, and generate a
+                source-grounded draft for faculty review.
+              </p>
             </div>
-            <button
-              className="welcome-action"
-              onClick={() =>
-                uploadRef.current?.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                })
-              }
-              type="button"
-            >
-              <SparkIcon />
-              {actionLabel}
-            </button>
           </div>
-        </section>
-
-        <div className="page-container main-content" ref={uploadRef}>
-          <section className="action-strip" aria-labelledby="actions-title">
-            <h2 id="actions-title">Before you generate</h2>
-            <div className="action-list">
-              <div className="action-item">
-                <span className="action-icon">
-                  <FileIcon />
-                </span>
-                <div>
-                  <strong>Use complete source notes</strong>
-                  <span>Include figures, formulas and unit headings.</span>
-                </div>
-                <ChevronIcon />
-              </div>
-              <div className="action-item">
-                <span className="action-icon">
-                  <SparkIcon />
-                </span>
-                <div>
-                  <strong>Select only the required pages</strong>
-                  <span>Exclude covers, contents pages and unrelated chapters.</span>
-                </div>
-                <ChevronIcon />
-              </div>
-            </div>
-          </section>
-
-          {error && (
+          {workspace.error && (
             <div className="request-error" role="alert">
-              <strong>Could not process this document</strong>
-              <p>{error}</p>
+              <strong>Could not generate this paper</strong>
+              <p>{workspace.error}</p>
             </div>
           )}
-
-          {result ? (
-            <WorkflowResultPanel
-              onReset={reset}
-              result={result}
-            />
-          ) : (
-            <UploadPanel
-              file={file}
-              loading={loading}
-              startPage={startPage}
-              endPage={endPage}
-              onFileChange={setFile}
-              onStartPageChange={setStartPage}
-              onEndPageChange={setEndPage}
-              onSubmit={submit}
-            />
-          )}
-
-          <section
-            aria-labelledby="recent-title"
-            className="workspace-panel recent-panel"
-            id="recent-papers"
-          >
-            <div className="panel-heading">
-              <div>
-                <h2 id="recent-title">Recent papers</h2>
-                <p>Question papers generated in this browser appear here.</p>
-              </div>
-            </div>
-
-            {history.length ? (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Document</th>
-                      <th>Subject</th>
-                      <th>Pages</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {history.map((paper) => (
-                      <tr key={paper.id}>
-                        <td>{paper.filename}</td>
-                        <td>{paper.subject}</td>
-                        <td>{paper.pageRange ?? "—"}</td>
-                        <td>
-                          {new Intl.DateTimeFormat(undefined, {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          }).format(new Date(paper.createdAt))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="empty-state">
-                <FileIcon />
-                <div>
-                  <strong>No papers yet</strong>
-                  <p>Your first generated paper will appear here.</p>
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-      </main>
+          <UploadPanel
+            courseOutcomes={courseOutcomes}
+            examDetails={examDetails}
+            generationJob={job}
+            loading={loading}
+            onCourseOutcomesChange={setCourseOutcomes}
+            onExamDetailsChange={setExamDetails}
+            onPatternChange={(next) => setPatternId(next as PatternId)}
+            onSetCountChange={(setCount) =>
+              updateWorkspace(patternId, { setCount })
+            }
+            onSubmit={() => void generate()}
+            onUnitUploadsChange={(unitUploads) =>
+              updateWorkspace(patternId, { unitUploads, error: null })
+            }
+            patternId={patternId}
+            setCount={workspace.setCount}
+            unitUploads={workspace.unitUploads}
+          />
+        </main>
+      )}
     </div>
   );
 }

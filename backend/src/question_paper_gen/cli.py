@@ -4,7 +4,7 @@ import argparse
 import json
 
 from .documents import PdfInspector
-from .patterns import default_college_pattern
+from .patterns import get_pattern
 
 
 def main() -> None:
@@ -30,7 +30,7 @@ def main() -> None:
         )
         print(manifest.model_dump_json(indent=2))
     elif arguments.command == "pattern":
-        print(default_college_pattern().model_dump_json(indent=2))
+        print(get_pattern(None).model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import hashlib
 import logging
 import math
 import re
+import tempfile
 from pathlib import Path
 
 import fitz
@@ -39,6 +40,89 @@ class PdfInspector:
         self.render_dpi = render_dpi
         self.max_pages = max_pages
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
+
+    def inspect_units(
+        self,
+        sources: list[UnitSource],
+    ) -> DocumentManifest:
+        """Inspect several uploads as one exam source, one file per syllabus unit.
+
+        A continuous assessment test covers whole units and, where a unit is split
+        between two tests, only part of one — so each upload carries its own page
+        range. The selected pages are concatenated into a single isolated PDF
+        before any model call, exactly as a single-file selection is, and every
+        page keeps the unit it came from. That is what lets a question be bound to
+        its unit and therefore to its course outcome without guessing.
+        """
+        if not sources:
+            raise DocumentInspectionError("no unit files were supplied")
+        merged = fitz.open()
+        page_units: list[tuple[str, str, int]] = []
+        try:
+            for source in sources:
+                path = Path(source.file_path)
+                self._validate_source(path)
+                try:
+                    document = fitz.open(path)
+                except Exception as exc:
+                    raise DocumentInspectionError(
+                        f"could not open {source.original_filename}: {exc}"
+                    ) from exc
+                with document:
+                    if document.needs_pass:
+                        raise DocumentInspectionError(
+                            f"{source.original_filename} is password-protected"
+                        )
+                    if document.page_count == 0:
+                        raise DocumentInspectionError(
+                            f"{source.original_filename} has no pages"
+                        )
+                    start = source.start_page or 1
+                    end = source.end_page or document.page_count
+                    self._validate_page_range(start, end, document.page_count)
+                    merged.insert_pdf(
+                        document, from_page=start - 1, to_page=end - 1
+                    )
+                    for original in range(start, end + 1):
+                        page_units.append(
+                            (source.unit, source.original_filename, original)
+                        )
+            if merged.page_count > self.max_pages:
+                raise DocumentInspectionError(
+                    f"the selected pages total {merged.page_count}; "
+                    f"limit is {self.max_pages}"
+                )
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+                merged_path = Path(handle.name)
+            merged.save(merged_path)
+        finally:
+            merged.close()
+
+        try:
+            manifest = self.inspect(merged_path)
+        finally:
+            merged_path.unlink(missing_ok=True)
+
+        # Every page carries the unit it was uploaded under.
+        tagged = [
+            page.model_copy(
+                update={
+                    "unit": page_units[index][0],
+                    "source_filename": page_units[index][1],
+                    "original_page_number": page_units[index][2],
+                }
+            )
+            if index < len(page_units)
+            else page
+            for index, page in enumerate(manifest.pages)
+        ]
+        logger.info(
+            "pdf.inspect_units.complete files=%d pages=%d units=%s",
+            len(sources),
+            len(tagged),
+            ",".join(sorted({source.unit for source in sources})),
+        )
+        return manifest.model_copy(update={"pages": tagged})
 
     def inspect(
         self,

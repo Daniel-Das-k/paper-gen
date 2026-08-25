@@ -1,46 +1,71 @@
-import { SettingsIcon, SparkIcon } from "../icons/Icons";
+import type { DemoRole } from "../../types/api";
+
+export type DemoView = "dashboard" | "create" | "queue" | "history";
 
 interface AppHeaderProps {
-  onNewPaper: () => void;
+  view: DemoView;
+  role: DemoRole;
+  onViewChange: (view: DemoView) => void;
+  onRoleChange: (role: DemoRole) => void;
+  onExitDemo: () => void;
 }
 
-export function AppHeader({ onNewPaper }: AppHeaderProps) {
+const ROLE_LABELS: Record<DemoRole, string> = {
+  faculty: "Faculty",
+  hod: "HOD",
+  coe: "CoE",
+};
+
+export function AppHeader({
+  view,
+  role,
+  onViewChange,
+  onRoleChange,
+  onExitDemo,
+}: AppHeaderProps) {
   return (
     <header className="app-header">
-      <div className="header-inner">
-        <button className="brand" onClick={onNewPaper} type="button">
-          <span className="brand-mark">
-            <SparkIcon />
-          </span>
-          <span>Paperly</span>
+      <div className="header-inner demo-header-inner">
+        <button
+          className="demo-brand"
+          onClick={onExitDemo}
+          type="button"
+        >
+          <strong>REC Question Paper Studio</strong>
+          <span>Local demonstration</span>
         </button>
 
-        <div className="institution-switcher">
-          <span className="institution-icon">C</span>
-          <span className="institution-name">College workspace</span>
-          <span className="institution-chevron">⌄</span>
-        </div>
-
-        <nav aria-label="Primary navigation" className="primary-nav">
-          <button className="nav-link nav-link-active" onClick={onNewPaper} type="button">
-            Generate
-          </button>
-          <a className="nav-link" href="#recent-papers">
-            Papers
-          </a>
-          <a className="nav-link" href="#paper-pattern">
-            Pattern
-          </a>
+        <nav aria-label="Primary navigation" className="demo-nav">
+          {([
+            ["dashboard", "Dashboard"],
+            ["create", "Create paper"],
+            ["queue", "Review queue"],
+            ["history", "Paper history"],
+          ] as const).map(([target, label]) => (
+            <button
+              className={view === target ? "demo-nav-active" : ""}
+              key={target}
+              onClick={() => onViewChange(target)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
         </nav>
 
-        <div className="header-actions">
-          <button aria-label="Settings" className="icon-button" type="button">
-            <SettingsIcon />
-          </button>
-          <button aria-label="Account menu" className="avatar-button" type="button">
-            DD
-          </button>
-        </div>
+        <label className="demo-role-select">
+          <span>Viewing as</span>
+          <select
+            onChange={(event) => onRoleChange(event.target.value as DemoRole)}
+            value={role}
+          >
+            {(Object.keys(ROLE_LABELS) as DemoRole[]).map((value) => (
+              <option key={value} value={value}>
+                {ROLE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
     </header>
   );

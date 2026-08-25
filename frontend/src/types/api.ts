@@ -82,14 +82,57 @@ export interface PreparationResponse {
   blueprint: PaperBlueprint;
 }
 
+export interface MarkingCriterion {
+  criterion: string;
+  marks: number;
+}
+
+export interface AnswerKeyEntry {
+  question_id: string;
+  question_number: string;
+  section_id: string;
+  marks: number;
+  criteria: MarkingCriterion[];
+  answer: string;
+}
+
+export interface GeneratedSet {
+  set_label?: string | null;
+  answer_key?: AnswerKeyEntry[];
+  pdf_download_url: string;
+  scheme_download_url: string;
+  docx_download_url?: string | null;
+}
+
 export interface FullWorkflowResponse extends PreparationResponse {
   pdf_download_url: string;
+  scheme_download_url: string;
+  docx_download_url?: string | null;
+  answer_key?: AnswerKeyEntry[];
+  sets?: GeneratedSet[];
+  cross_set_warnings?: string[];
   paper: {
     title: string;
+    set_label?: string | null;
+    subject: string;
     subject_family: string;
+    duration_minutes: number;
     total_marks: number;
+    exam_header: ExamHeader;
     requires_human_approval: boolean;
     publication_ready: boolean;
+    course_outcome_coverage?: {
+      marks_by_outcome: Record<string, number>;
+      unmapped_marks: number;
+      total_marks: number;
+    };
+    bloom_summary?: {
+      requested: Record<string, number>;
+      observed: Record<string, number>;
+      deviations: number;
+      total: number;
+      unverified: number;
+    };
     questions: Array<{
       question_id: string;
       slot_id: string;
@@ -99,8 +142,13 @@ export interface FullWorkflowResponse extends PreparationResponse {
       question_text: string;
       marks: number;
       bloom_level: BloomLevel;
+      observed_bloom_level?: BloomLevel | null;
+      bloom_matches_blueprint?: boolean;
+      course_outcome?: string | null;
+      course_outcome_code?: string | null;
       visual_asset_id?: string | null;
       accepted: boolean;
+      faculty_modified?: boolean;
       quality_score?: number | null;
       findings: Array<{
         code: string;
@@ -109,4 +157,105 @@ export interface FullWorkflowResponse extends PreparationResponse {
       }>;
     }>;
   };
+}
+
+export interface ExamHeader {
+  college: string;
+  institution_line: string;
+  affiliation: string;
+  exam_title: string;
+  year: string;
+  semester: string;
+  branch: string;
+  subject_code: string;
+  subject_name: string;
+  qp_code: string;
+  regulation: string;
+  common_to: string;
+  date: string;
+  register_number_boxes: number;
+}
+
+export type DemoRole = "faculty" | "hod" | "coe";
+export type DemoPaperStatus =
+  | "draft"
+  | "submitted_to_hod"
+  | "submitted_to_coe"
+  | "approved";
+
+export interface DemoJob {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  stage: string;
+  progress: number;
+  error?: string | null;
+  paper_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DemoPaperSummary {
+  id: string;
+  pattern_id: string;
+  subject: string;
+  course_code: string;
+  course_name: string;
+  exam_label: string;
+  status: DemoPaperStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DemoActivity {
+  actor_role: DemoRole;
+  action: string;
+  comment: string;
+  created_at: string;
+}
+
+export interface DemoPaperRecord extends DemoPaperSummary {
+  result: FullWorkflowResponse;
+  activities: DemoActivity[];
+}
+
+export interface PaperPatternSection {
+  section_id: string;
+  title: string;
+  unit_number?: string | null;
+  question_kind: string;
+  question_count: number;
+  marks_each: number;
+  answers_required: number;
+  choices_per_question: number;
+}
+
+export interface PaperPattern {
+  pattern_id: string;
+  name: string;
+  duration_minutes: number;
+  total_marks: number;
+  sections: PaperPatternSection[];
+}
+
+export interface SyllabusUnit {
+  number: string;
+  title: string;
+  topics: string;
+}
+
+export interface SyllabusExtraction {
+  subject_code?: string | null;
+  subject_name?: string | null;
+  regulation?: string | null;
+  units: SyllabusUnit[];
+  course_outcomes: string[];
+  extraction_confident: boolean;
+  problem?: string | null;
+}
+
+export interface UnitUpload {
+  unit: string;
+  file: File | null;
+  startPage: string;
+  endPage: string;
 }

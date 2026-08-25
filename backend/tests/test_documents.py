@@ -1,3 +1,4 @@
+import pytest
 from pathlib import Path
 
 import fitz
@@ -139,3 +140,87 @@ def test_visual_prefilter_rejects_page_masks_and_tiny_fragments() -> None:
         height=600,
         byte_count=24_000,
     )
+
+
+def _unit_pdf(directory, name: str, pages: int, label: str):
+    """A small readable PDF standing in for one unit's material."""
+    import fitz
+
+    document = fitz.open()
+    for number in range(pages):
+        page = document.new_page()
+        page.insert_text(
+            (72, 100),
+            f"{label} page {number + 1}. "
+            + "Explained instructional content about the topic. " * 12,
+        )
+    path = directory / name
+    document.save(path)
+    document.close()
+    return path
+
+
+def test_units_are_merged_into_one_isolated_source(tmp_path) -> None:
+    """CAT-I takes units 1 and 2 whole and only the first half of unit 3."""
+    from question_paper_gen.documents import PdfInspector
+    from question_paper_gen.models import UnitSource
+
+    sources = [
+        UnitSource(
+            unit="1",
+            file_path=str(_unit_pdf(tmp_path, "u1.pdf", 4, "Unit one")),
+            original_filename="u1.pdf",
+        ),
+        UnitSource(
+            unit="2",
+            file_path=str(_unit_pdf(tmp_path, "u2.pdf", 4, "Unit two")),
+            original_filename="u2.pdf",
+        ),
+        UnitSource(
+            unit="3",
+            file_path=str(_unit_pdf(tmp_path, "u3.pdf", 10, "Unit three")),
+            original_filename="u3.pdf",
+            start_page=1,
+            end_page=5,
+        ),
+    ]
+
+    manifest = PdfInspector(artifact_root=tmp_path / "artifacts").inspect_units(
+        sources
+    )
+
+    # 4 + 4 + 5: the second half of unit 3 is not part of this exam at all.
+    assert len(manifest.pages) == 13
+    assert [page.unit for page in manifest.pages] == (
+        ["1"] * 4 + ["2"] * 4 + ["3"] * 5
+    )
+    assert [page.original_page_number for page in manifest.pages[8:]] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]
+    assert {page.source_filename for page in manifest.pages} == {
+        "u1.pdf",
+        "u2.pdf",
+        "u3.pdf",
+    }
+    # Nothing from the excluded pages reaches the isolated source.
+    assert "Unit three page 6" not in " ".join(page.text for page in manifest.pages)
+
+
+def test_a_unit_page_range_beyond_the_file_is_rejected(tmp_path) -> None:
+    from question_paper_gen.documents import DocumentInspectionError, PdfInspector
+    from question_paper_gen.models import UnitSource
+
+    source = UnitSource(
+        unit="3",
+        file_path=str(_unit_pdf(tmp_path, "u3.pdf", 4, "Unit three")),
+        original_filename="u3.pdf",
+        start_page=1,
+        end_page=99,
+    )
+
+    with pytest.raises(DocumentInspectionError):
+        PdfInspector(artifact_root=tmp_path / "artifacts").inspect_units([source])

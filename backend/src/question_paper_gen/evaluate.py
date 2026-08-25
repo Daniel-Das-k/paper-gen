@@ -23,7 +23,7 @@ from pathlib import Path
 from .ai import DocumentAnalyzer
 from .blueprints import BlueprintBuilder
 from .documents import PdfInspector
-from .patterns import default_college_pattern
+from .patterns import get_pattern
 from .pipeline import PaperGenerationPipeline
 from .validation import find_duplicate_questions
 
@@ -44,7 +44,7 @@ async def _run(args: argparse.Namespace) -> None:
           f"{manifest.selected_page_end} ...")
     content_map, assets = await analyzer.analyze_document(manifest)
     manifest = manifest.model_copy(update={"visual_assets": assets})
-    pattern = default_college_pattern()
+    pattern = get_pattern(None)
     blueprint = BlueprintBuilder().build(pattern, content_map, manifest)
     print(
         f"prepared: {len(content_map.topics)} topics, "

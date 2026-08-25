@@ -203,3 +203,4 @@ a test failure. The suite can be run while bypassing that broken extension:
 ```bash
 PYTHONPATH=src python -c "import sys,types; sys.modules['readline']=types.ModuleType('readline'); import pytest; raise SystemExit(pytest.main(['-q']))"
 ```
+

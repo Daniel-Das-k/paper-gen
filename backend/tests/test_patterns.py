@@ -14,45 +14,12 @@ from question_paper_gen.models import (
     SectionPattern,
     SubpartPattern,
 )
-from question_paper_gen.patterns import default_college_pattern
-
-
-def test_default_pattern_matches_supplied_80_mark_sample() -> None:
-    pattern = default_college_pattern()
-
-    assert pattern.total_marks == 80
-    assert sum(
-        section.question_count * section.marks_each for section in pattern.sections
-    ) == 80
-    assert [section.question_count for section in pattern.sections] == [20, 5, 6, 4, 3]
-    assert [section.marks_each for section in pattern.sections] == [1, 2, 3, 5, 4]
-    assert [section.internal_choice_count for section in pattern.sections] == [
-        0,
-        2,
-        2,
-        2,
-        3,
-    ]
-    assert pattern.sections[0].question_kind == QuestionKind.MULTIPLE_CHOICE
-    assert pattern.sections[0].question_kind_sequence == [
-        *([QuestionKind.MULTIPLE_CHOICE] * 18),
-        QuestionKind.ASSERTION_REASON,
-        QuestionKind.ASSERTION_REASON,
-    ]
-    assert pattern.sections[-1].question_kind == QuestionKind.CASE_STUDY
-    assert [
-        section.internal_choice_positions for section in pattern.sections
-    ] == [[], [2, 3], [1, 3], [2, 3], [1, 2, 3]]
-    assert [part.marks for part in pattern.sections[-1].subparts] == [1, 1, 2]
-    assert pattern.sections[-1].internal_choice_scope == "final_subpart"
-    assert [section.visual_question_count for section in pattern.sections] == [
-        1,
-        0,
-        1,
-        1,
-        1,
-    ]
-    assert pattern.sections[0].bloom_sequence[:6] == [BloomLevel.REMEMBER] * 6
+from question_paper_gen.patterns import (
+    DEFAULT_PATTERN_ID,
+    autonomous_semester_pattern,
+    available_patterns,
+    get_pattern,
+)
 
 
 def test_pattern_rejects_wrong_total() -> None:
@@ -134,3 +101,156 @@ def test_grouped_model_failures_are_diagnosed_without_response_bodies() -> None:
     assert "model=gemini-3.6-flash status=503" in summary
     assert "model=gemini-3.5-flash status=429" in summary
     assert "private" not in summary
+
+
+def test_autonomous_semester_pattern_matches_the_100_mark_house_style() -> None:
+    pattern = autonomous_semester_pattern()
+
+    assert pattern.pattern_id == "autonomous-semester-100"
+    assert pattern.total_marks == 100
+    assert pattern.duration_minutes == 180
+    assert [section.section_id for section in pattern.sections] == [
+        "part_a",
+        "part_b",
+        "part_c",
+    ]
+    assert [section.question_count for section in pattern.sections] == [10, 5, 1]
+    assert [section.marks_each for section in pattern.sections] == [2, 13, 15]
+    assert [section.visual_question_count for section in pattern.sections] == [0, 5, 1]
+    assert sum(
+        section.question_count * section.marks_each for section in pattern.sections
+    ) == 100
+
+
+def test_autonomous_part_b_is_a_whole_question_either_or() -> None:
+    part_b = autonomous_semester_pattern().sections[1]
+
+    # Every Part B question is "(a) OR (b)". Whichever the student answers is
+    # marked out of the full 13 — there is no subpart breakdown to award from.
+    assert part_b.choices_per_question == 2
+    assert part_b.answers_required == 1
+    assert part_b.internal_choice_count == 5
+    assert part_b.internal_choice_positions == [1, 2, 3, 4, 5]
+    assert part_b.internal_choice_scope == "whole_question"
+    assert part_b.subparts == []
+    assert part_b.marks_each == 13
+
+
+def test_autonomous_part_c_is_a_single_higher_order_choice() -> None:
+    part_c = autonomous_semester_pattern().sections[2]
+
+    assert part_c.question_count == 1
+    assert part_c.marks_each == 15
+    assert part_c.choices_per_question == 2
+    assert part_c.answers_required == 1
+    assert part_c.bloom_sequence == [BloomLevel.CREATE]
+
+
+def test_autonomous_pattern_spans_lower_and_higher_order_bloom_levels() -> None:
+    """NBA evaluators sample a paper for cognitive spread, so assert it explicitly."""
+    levels = [
+        level
+        for section in autonomous_semester_pattern().sections
+        for level in section.bloom_sequence
+    ]
+
+    assert len(levels) == 16
+    assert levels.count(BloomLevel.REMEMBER) == 3
+    assert levels.count(BloomLevel.UNDERSTAND) == 4
+    assert levels.count(BloomLevel.APPLY) == 5
+    assert levels.count(BloomLevel.ANALYZE) == 3
+    assert levels.count(BloomLevel.CREATE) == 1
+
+
+def test_pattern_registry_resolves_by_id_and_defaults_when_unset() -> None:
+    assert DEFAULT_PATTERN_ID == "autonomous-semester-100"
+    assert get_pattern(None).pattern_id == "autonomous-semester-100"
+    assert get_pattern(None).total_marks == 100
+    assert get_pattern("autonomous-semester-100").pattern_id == (
+        "autonomous-semester-100"
+    )
+    assert {pattern.pattern_id for pattern in available_patterns()} == {
+        "cat-1-75",
+        "cat-2-75",
+        "autonomous-semester-100",
+    }
+
+
+def test_school_board_pattern_is_no_longer_offered() -> None:
+    """The product sets college end-semester papers only."""
+    with pytest.raises(KeyError):
+        get_pattern("sample-paper-80-v2")
+
+
+def test_unknown_pattern_id_raises_rather_than_silently_defaulting() -> None:
+    with pytest.raises(KeyError, match="unknown pattern_id"):
+        get_pattern("does-not-exist")
+
+
+def test_cat_papers_combine_all_short_and_long_questions() -> None:
+    """CAT papers print one Part A followed by one Part B across all units."""
+    expected_units = {
+        "cat-1-75": (
+            ["1"] * 4 + ["2"] * 4 + ["3"] * 2,
+            ["1"] * 2 + ["2"] * 2 + ["3"],
+        ),
+        "cat-2-75": (
+            ["3"] * 2 + ["4"] * 4 + ["5"] * 4,
+            ["3"] + ["4"] * 2 + ["5"] * 2,
+        ),
+    }
+    for pattern_id, (short_units, long_units) in expected_units.items():
+        pattern = get_pattern(pattern_id)
+
+        assert pattern.total_marks == 75
+        assert pattern.duration_minutes == 120
+        assert [section.section_id for section in pattern.sections] == [
+            "part_a",
+            "part_b",
+        ]
+        part_a, part_b = pattern.sections
+        assert part_a.title == "PART A — Answer ALL questions (10 x 2 = 20 marks)"
+        assert part_a.question_count == 10
+        assert part_a.marks_each == 2
+        assert part_a.unit_cycle == short_units
+        assert part_a.visual_question_count == 0
+
+        assert part_b.title == "PART B — Answer ALL questions (5 x 11 = 55 marks)"
+        assert part_b.question_count == 5
+        assert part_b.marks_each == 11
+        assert part_b.unit_cycle == long_units
+        assert part_b.choices_per_question == 2
+        assert part_b.internal_choice_positions == [1, 2, 3, 4, 5]
+        assert part_b.subparts == []
+        assert part_b.visual_question_count == 5
+
+        assert sum(
+            section.question_count * section.marks_each
+            for section in pattern.sections
+        ) == 75
+
+
+def test_the_three_papers_a_year_actually_sets_are_all_offered() -> None:
+    offered = {pattern.pattern_id: pattern for pattern in available_patterns()}
+
+    assert set(offered) == {"cat-1-75", "cat-2-75", "autonomous-semester-100"}
+    assert offered["cat-1-75"].total_marks == 75
+    assert offered["cat-2-75"].total_marks == 75
+    assert offered["autonomous-semester-100"].total_marks == 100
+
+
+
+def test_every_paper_binds_its_questions_to_syllabus_units() -> None:
+    """Unit N assesses CO N, so each paper must say which units it covers."""
+    covered = {}
+    for pattern_id in ("cat-1-75", "cat-2-75", "autonomous-semester-100"):
+        units: set[str] = set()
+        for section in get_pattern(pattern_id).sections:
+            if section.unit_number:
+                units.add(section.unit_number)
+            units.update(section.unit_cycle)
+        covered[pattern_id] = units
+
+    assert covered["cat-1-75"] == {"1", "2", "3"}
+    assert covered["cat-2-75"] == {"3", "4", "5"}
+    assert covered["autonomous-semester-100"] == {"1", "2", "3", "4", "5"}
