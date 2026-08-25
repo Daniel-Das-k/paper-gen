@@ -76,3 +76,40 @@ export function SettingsIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function DashboardIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="4" y="4" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="14" y="4" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="4" y="14" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="14" y="14" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.6" />
+    </IconBase>
+  );
+}
+
+export function ReviewIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M8 5h9.5A1.5 1.5 0 0 1 19 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 17.5V8" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m4 5 1.5 1.5L8.5 3.5M9 10h6M9 14h6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
+    </IconBase>
+  );
+}
+
+export function HistoryIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M5.5 7.5A8 8 0 1 1 4 12" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+      <path d="M5.5 3.5v4h4M12 7.5V12l3 2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
+    </IconBase>
+  );
+}
+
+export function ExitIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
+    </IconBase>
+  );
+}

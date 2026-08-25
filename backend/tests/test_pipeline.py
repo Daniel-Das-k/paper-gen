@@ -540,6 +540,12 @@ def test_pipeline_produces_review_required_100_mark_draft() -> None:
     assert paper.publication_ready
     assert paper.subject_family == "computing"
     assert all(question.quality_score == 100 for question in paper.questions)
+    assert all(question.quality_dimensions is not None for question in paper.questions)
+    assert all(
+        question.quality_dimensions.grounding == 100
+        for question in paper.questions
+        if question.quality_dimensions is not None
+    )
     assert analyzer.generation_calls == 3
     assert analyzer.maximum_generation_concurrency == 3
     assert analyzer.review_calls == 3

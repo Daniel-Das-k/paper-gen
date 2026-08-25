@@ -1,4 +1,12 @@
 import type { DemoRole } from "../../types/api";
+import {
+  DashboardIcon,
+  ExitIcon,
+  FileIcon,
+  HistoryIcon,
+  ReviewIcon,
+  UploadIcon,
+} from "../icons/Icons";
 
 export type DemoView = "dashboard" | "create" | "queue" | "history";
 
@@ -23,39 +31,50 @@ export function AppHeader({
   onRoleChange,
   onExitDemo,
 }: AppHeaderProps) {
-  return (
-    <header className="app-header">
-      <div className="header-inner demo-header-inner">
-        <button
-          className="demo-brand"
-          onClick={onExitDemo}
-          type="button"
-        >
-          <strong>REC Question Paper Studio</strong>
-          <span>Local demonstration</span>
-        </button>
+  const navigation = [
+    ["dashboard", "Dashboard", DashboardIcon],
+    ["create", "Generate paper", UploadIcon],
+    ["queue", "Review queue", ReviewIcon],
+    ["history", "Question papers", HistoryIcon],
+  ] as const;
 
-        <nav aria-label="Primary navigation" className="demo-nav">
-          {([
-            ["dashboard", "Dashboard"],
-            ["create", "Create paper"],
-            ["queue", "Review queue"],
-            ["history", "Paper history"],
-          ] as const).map(([target, label]) => (
+  return (
+    <aside className="app-sidebar">
+      <button className="demo-brand" onClick={onExitDemo} type="button">
+        <span aria-hidden="true" className="demo-brand-mark">
+          <FileIcon />
+        </span>
+        <span className="demo-brand-copy">
+          <strong>REC QP Studio</strong>
+          <span>Rajalakshmi Engineering College</span>
+        </span>
+      </button>
+
+      <nav aria-label="Primary navigation" className="demo-nav">
+        {navigation.map(([target, label, Icon]) => (
             <button
               className={view === target ? "demo-nav-active" : ""}
               key={target}
               onClick={() => onViewChange(target)}
               type="button"
             >
-              {label}
+              <Icon />
+              <span>{label}</span>
             </button>
-          ))}
-        </nav>
+        ))}
+      </nav>
 
+      <div className="demo-sidebar-footer">
         <label className="demo-role-select">
-          <span>Viewing as</span>
+          <span className="demo-role-avatar" aria-hidden="true">
+            {ROLE_LABELS[role].slice(0, 1)}
+          </span>
+          <span className="demo-role-copy">
+            <strong>Demo user</strong>
+            <span>Viewing as {ROLE_LABELS[role]}</span>
+          </span>
           <select
+            aria-label="Viewing role"
             onChange={(event) => onRoleChange(event.target.value as DemoRole)}
             value={role}
           >
@@ -66,7 +85,11 @@ export function AppHeader({
             ))}
           </select>
         </label>
+        <button className="demo-exit" onClick={onExitDemo} type="button">
+          <ExitIcon />
+          <span>Back to product site</span>
+        </button>
       </div>
-    </header>
+    </aside>
   );
 }

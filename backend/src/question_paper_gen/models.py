@@ -322,6 +322,20 @@ class QuestionCandidate(BaseModel):
     marking_scheme: list[MarkingCriterion]
     evidence: SourceEvidence
     confidence: Annotated[float, Field(ge=0, le=1)]
+    estimated_answer_minutes: Annotated[float, Field(gt=0)] | None = None
+
+
+class QuestionQualityDimensions(BaseModel):
+    """Independent quality signals retained for faculty-facing review."""
+
+    grounding: Annotated[int, Field(ge=0, le=100)]
+    correctness: Annotated[int, Field(ge=0, le=100)]
+    clarity: Annotated[int, Field(ge=0, le=100)]
+    marks_fit: Annotated[int, Field(ge=0, le=100)]
+    bloom_alignment: Annotated[int, Field(ge=0, le=100)]
+    originality: Annotated[int, Field(ge=0, le=100)]
+    answer_scheme: Annotated[int, Field(ge=0, le=100)]
+    visual_relevance: Annotated[int, Field(ge=0, le=100)] | None = None
 
 
 class ValidationFinding(BaseModel):
@@ -335,6 +349,7 @@ class ValidatedQuestion(BaseModel):
     accepted: bool
     findings: list[ValidationFinding] = Field(default_factory=list)
     quality_score: Annotated[int, Field(ge=0, le=100)] | None = None
+    quality_dimensions: QuestionQualityDimensions | None = None
     observed_bloom_level: BloomLevel | None = None
     """Level the reviewer judged the question to actually demand.
 
@@ -379,6 +394,7 @@ class QuestionPaperItem(BaseModel):
     accepted: bool
     faculty_modified: bool = False
     quality_score: Annotated[int, Field(ge=0, le=100)] | None = None
+    quality_dimensions: QuestionQualityDimensions | None = None
     findings: list[ValidationFinding] = Field(default_factory=list)
 
 
@@ -558,6 +574,7 @@ class GeneratedQuestionPaper(BaseModel):
                     visual_asset_id=question.candidate.evidence.visual_asset_id,
                     accepted=question.accepted,
                     quality_score=question.quality_score,
+                    quality_dimensions=question.quality_dimensions,
                     findings=question.findings,
                 )
                 for index, question in enumerate(paper.questions, start=1)

@@ -150,6 +150,33 @@ class QuestionValidator:
         )
         if not scheme_is_valid:
             error("rubric_total", "marking scheme does not add up to question marks")
+        normalized_criteria = [
+            " ".join(re.findall(r"[a-z0-9]+", item.criterion.lower()))
+            for item in candidate.marking_scheme
+        ]
+        if len(normalized_criteria) != len(set(normalized_criteria)):
+            error(
+                "duplicate_marking_criteria",
+                "marking scheme repeats the same credit criterion more than once",
+            )
+        if candidate.marks >= 5 and len(candidate.marking_scheme) < 2:
+            warning(
+                "rubric_lacks_granularity",
+                "a question worth five marks or more should award credit across at least two explicit reasoning steps",
+            )
+        answer_words = len(re.findall(r"\b[\w'-]+\b", candidate.answer))
+        if candidate.marks >= 5 and answer_words < candidate.marks * 2:
+            warning(
+                "answer_too_brief_for_marks",
+                f"the model answer has {answer_words} words for {candidate.marks} marks; verify that it demonstrates every required step",
+            )
+        if candidate.estimated_answer_minutes is not None:
+            minutes_per_mark = candidate.estimated_answer_minutes / candidate.marks
+            if minutes_per_mark < 0.5 or minutes_per_mark > 3.0:
+                warning(
+                    "answer_time_mismatch",
+                    f"estimated answer time {candidate.estimated_answer_minutes:g} minutes is not proportionate to {candidate.marks} marks",
+                )
         # ")/(" is intentionally NOT flagged: the backend's own LaTeX cleaner
         # renders \frac{a}{b} as (a)/(b), which is valid student-facing text.
         malformed_notation = re.compile(
@@ -400,6 +427,14 @@ class QuestionValidator:
                     f"a {slot.marks}-mark question runs {words} words; keep it to "
                     f"one direct instruction under {SHORT_ANSWER_MAX_WORDS} words "
                     "with no scenario",
+                )
+            subpart_count = len(
+                re.findall(r"(?im)^\s*\(i+\)\s*", candidate.question_text)
+            )
+            if subpart_count:
+                error(
+                    "short_question_has_subparts",
+                    f"a {slot.marks}-mark question must contain one direct task, not {subpart_count} labelled subpart{'s' if subpart_count != 1 else ''}",
                 )
 
         alternatives = re.split(

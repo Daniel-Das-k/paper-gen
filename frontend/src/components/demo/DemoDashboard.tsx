@@ -7,21 +7,15 @@ import type {
   DemoRole,
 } from "../../types/api";
 
-const ROLE_COPY: Record<DemoRole, { eyebrow: string; title: string; body: string }> = {
+const ROLE_COPY: Record<DemoRole, { body: string }> = {
   faculty: {
-    eyebrow: "Faculty workspace",
-    title: "Prepare papers and move drafts forward",
-    body: "Create question papers, complete faculty review, and submit finished drafts to the HOD.",
+    body: "Create, review and submit examination papers from verified course material.",
   },
   hod: {
-    eyebrow: "HOD workspace",
-    title: "Review papers submitted by faculty",
-    body: "Check academic quality and coverage before forwarding papers to the Controller of Examinations.",
+    body: "Review academic quality and forward approved papers to the Controller of Examinations.",
   },
   coe: {
-    eyebrow: "Examination workspace",
-    title: "Complete the final examination review",
-    body: "Verify submitted papers, record the final decision, and keep approved papers ready for examination use.",
+    body: "Complete the final examination review and keep approved papers ready for use.",
   },
 };
 
@@ -99,16 +93,20 @@ export function DemoDashboard({
     <main className="demo-page demo-dashboard page-container">
       <section className="dashboard-intro" aria-labelledby="dashboard-title">
         <div>
-          <span className="dashboard-eyebrow">{copy.eyebrow}</span>
-          <h1 id="dashboard-title">{copy.title}</h1>
+          <h1 id="dashboard-title">Dashboard</h1>
           <p>{copy.body}</p>
         </div>
         <button className="primary-button" onClick={onCreate} type="button">
-          Create paper
+          Generate paper
         </button>
       </section>
 
       <section className="dashboard-summary" aria-label="Paper summary">
+        <div>
+          <span>Total papers</span>
+          <strong>{papers.length}</strong>
+          <small>In this local workspace</small>
+        </div>
         <div>
           <span>Drafts</span>
           <strong>{counts.draft}</strong>
@@ -167,8 +165,8 @@ export function DemoDashboard({
       <section className="dashboard-section">
         <div className="dashboard-section-heading">
           <div>
-            <h2>Needs your attention</h2>
-            <p>Papers currently waiting for the selected role.</p>
+            <h2>Papers requiring attention</h2>
+            <p>Open a paper to review findings, make corrections or move it forward.</p>
           </div>
           <button className="text-button" onClick={onQueue} type="button">
             View review queue

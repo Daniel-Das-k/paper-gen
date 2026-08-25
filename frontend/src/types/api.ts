@@ -64,6 +64,8 @@ export interface BlueprintSlot {
   question_kind: string;
   topic_id: string;
   unit: string;
+  facet?: string | null;
+  source_pages: number[];
   evidence_chunk_ids: string[];
   requires_visual: boolean;
   visual_asset_id?: string | null;
@@ -150,6 +152,16 @@ export interface FullWorkflowResponse extends PreparationResponse {
       accepted: boolean;
       faculty_modified?: boolean;
       quality_score?: number | null;
+      quality_dimensions?: {
+        grounding: number;
+        correctness: number;
+        clarity: number;
+        marks_fit: number;
+        bloom_alignment: number;
+        originality: number;
+        answer_scheme: number;
+        visual_relevance?: number | null;
+      } | null;
       findings: Array<{
         code: string;
         severity: "error" | "warning" | "info";

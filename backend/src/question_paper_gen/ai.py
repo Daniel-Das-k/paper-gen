@@ -26,6 +26,7 @@ from .models import (
     DocumentManifest,
     PageContent,
     QuestionCandidate,
+    QuestionQualityDimensions,
     Topic,
     VisualAsset,
     VisualType,
@@ -206,6 +207,7 @@ class SemanticReview(BaseModel):
     internal_choice_valid: bool
     pedagogical_quality: bool
     quality_score: int = Field(ge=0, le=100)
+    quality_dimensions: QuestionQualityDimensions | None = None
     confidence: float = Field(ge=0, le=1)
     reasons: list[str] = Field(default_factory=list)
 
@@ -1230,6 +1232,10 @@ class DocumentAnalyzer:
               case paragraph, a named organisation, or multiple sub-questions — those
               belong to the long-answer sections. Reserve original scenarios for
               questions worth 5 marks or more.
+            - Set estimated_answer_minutes to a realistic estimate for an adequately
+              prepared student. Use the actual reading and reasoning workload: roughly
+              1-2 minutes per mark is normal, with more time only for substantial
+              diagrams, calculations, datasets, or design work.
             - For case_study slots, create an original real-world case, passage, dataset,
               table, or experimental situation followed by exactly three connected
               subquestions marked (i), (ii), and (iii), with marks 1, 1, and 2. The
@@ -1263,6 +1269,11 @@ class DocumentAnalyzer:
             - Each marking scheme must add exactly to that question's marks. For a
               question with an internal choice, give criteria for ONE alternative
               only (the alternatives are equivalent); never sum both alternatives.
+              For questions worth 5 marks or more, split credit across the actual
+              reasoning, calculation, justification, or design steps. Never award all
+              marks through one vague criterion such as "complete answer".
+            - Write a model answer that demonstrates every marking criterion. Verify
+              calculations, units, option labels, and conclusions independently.
             - Write matrices and determinants inline in bracket form, e.g.
               A = [3 5; 2 7]. NEVER draw multi-line ASCII art with vertical bars,
               and never place a multi-line matrix inside an MCQ option — each
@@ -1357,6 +1368,13 @@ class DocumentAnalyzer:
             per failed boolean. Never include verification notes, praise,
             restatements of passing checks, or your full rubric — passing checks are
             already communicated by the boolean fields.
+            Always return quality_dimensions using 0-100 integer scores for grounding,
+            correctness, clarity, marks_fit, bloom_alignment, originality, and
+            answer_scheme. Score visual_relevance only for a visual question.
+            Originality means a distinct assessed task, not changed names or numbers.
+            The overall quality_score must not exceed a materially weak dimension and
+            must be below 85 when grounding, correctness, marks fit, or answer scheme
+            is materially defective.
             Be conservative.
             """
         ]
@@ -1463,6 +1481,8 @@ class DocumentAnalyzer:
             - A 5-mark question must require multi-step reasoning plus explanation or
               derivation. Evaluate requires justified judgment; Create requires a model
               or design with constraints.
+            - Set estimated_answer_minutes from the actual reading and reasoning
+              workload, normally about 1-2 minutes per mark.
             - A case-study slot needs an original, substantive, self-contained shared
               scenario or dataset and exactly three connected subquestions worth
               1, 1, and 2 marks. All parts must depend on the supplied case information;
@@ -1481,6 +1501,8 @@ class DocumentAnalyzer:
               numbered theorems and definitions. State any needed fact in the question.
             - The marking scheme must total exactly the question's marks, counting an
               internal choice's alternatives once (criteria for one alternative only).
+              For 5 marks or more, use multiple specific criteria tied to answer steps,
+              and make the model answer demonstrate every criterion.
             - Write matrices inline in bracket form, e.g. A = [3 5; 2 7]; never as
               multi-line ASCII art with vertical bars.
             """
@@ -1553,6 +1575,13 @@ class DocumentAnalyzer:
             and never on its own makes a question defective: an otherwise sound,
             well-grounded, correctly answered question is a PASS even when it sits above
             or below the required level. Judge every other check independently of it.
+
+            Always return quality_dimensions using 0-100 integer scores for grounding,
+            correctness, clarity, marks_fit, bloom_alignment, originality, and
+            answer_scheme. Score visual_relevance only when an image is attached.
+            Assess marks_fit from expected student workload and required answer depth.
+            Assess answer_scheme from correctness and mark-wise completeness. Keep the
+            overall quality_score at or below any materially weak dimension.
             """
         ]
         if visual_path:

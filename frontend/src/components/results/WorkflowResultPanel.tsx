@@ -118,7 +118,24 @@ const FINDING_LABELS: Record<string, string> = {
   low_pedagogical_quality: "Educational quality needs improvement",
   bloom_level_deviation: "Cognitive level differs from the blueprint",
   review_confidence: "Automated review confidence is low",
+  duplicate_marking_criteria: "Marking criteria are repeated",
+  rubric_lacks_granularity: "Marking scheme needs more detail",
+  answer_too_brief_for_marks: "Model answer is too brief",
+  answer_time_mismatch: "Expected answering time does not fit the marks",
+  short_question_has_subparts: "Too many tasks for a short question",
+  weak_originality: "Question is not sufficiently original",
 };
+
+const QUALITY_DIMENSIONS = [
+  ["grounding", "Source grounding"],
+  ["correctness", "Correctness"],
+  ["clarity", "Clarity"],
+  ["marks_fit", "Marks fit"],
+  ["bloom_alignment", "Bloom alignment"],
+  ["originality", "Originality"],
+  ["answer_scheme", "Answer and scheme"],
+  ["visual_relevance", "Visual relevance"],
+] as const;
 
 function findingLabel(code: string): string {
   return (
@@ -127,6 +144,17 @@ function findingLabel(code: string): string {
       .replace(/_/g, " ")
       .replace(/^./, (character) => character.toUpperCase())
   );
+}
+
+function displayBloom(level: BloomLevel): string {
+  return level.charAt(0).toUpperCase() + level.slice(1);
+}
+
+function displaySourcePages(pages: number[]): string {
+  const ordered = [...new Set(pages)].sort((left, right) => left - right);
+  if (ordered.length === 0) return "Not available";
+  if (ordered.length <= 3) return ordered.join(", ");
+  return `${ordered[0]}–${ordered[ordered.length - 1]}`;
 }
 
 export function WorkflowResultPanel({
@@ -188,6 +216,12 @@ export function WorkflowResultPanel({
 
   const answerKey = new Map(
     (result.answer_key ?? []).map((entry) => [entry.question_id, entry]),
+  );
+  const blueprintSlots = new Map(
+    result.blueprint.slots.map((slot) => [slot.slot_id, slot]),
+  );
+  const contentTopics = new Map(
+    result.content_map.topics.map((topic) => [topic.topic_id, topic]),
   );
   const allOpen = answerKey.size > 0 && openAnswers.size === answerKey.size;
 
@@ -721,7 +755,11 @@ export function WorkflowResultPanel({
             </div>
           ) : (
             <ol className="demo-question-list">
-              {questions.map((question) => (
+              {questions.map((question) => {
+                const slot = blueprintSlots.get(question.slot_id);
+                const topic = slot ? contentTopics.get(slot.topic_id) : undefined;
+                const sourcePages = slot?.source_pages ?? topic?.source_pages ?? [];
+                return (
                 <li
                   className={
                     question.accepted && question.findings.length === 0
@@ -731,7 +769,35 @@ export function WorkflowResultPanel({
                   key={question.question_id}
                 >
                   <span>{question.question_number}</span>
-                  <p>{question.question_text}</p>
+                  <div className="demo-question-content">
+                    <p>{question.question_text}</p>
+                    <div
+                      aria-label="Question blueprint and source"
+                      className="question-provenance"
+                    >
+                      <span>
+                        <strong>Bloom</strong> {displayBloom(question.bloom_level)}
+                      </span>
+                      {question.observed_bloom_level &&
+                        question.observed_bloom_level !== question.bloom_level && (
+                          <span className="question-provenance-warning">
+                            <strong>Observed</strong>{" "}
+                            {displayBloom(question.observed_bloom_level)}
+                          </span>
+                        )}
+                      {question.course_outcome_code && (
+                        <span>
+                          <strong>Outcome</strong> {question.course_outcome_code}
+                        </span>
+                      )}
+                      <span>
+                        <strong>Source</strong>{" "}
+                        {topic?.name ?? `Unit ${slot?.unit ?? "—"}`} · Unit{" "}
+                        {slot?.unit ?? topic?.unit ?? "—"} · pp.{" "}
+                        {displaySourcePages(sourcePages)}
+                      </span>
+                    </div>
+                  </div>
                   {question.faculty_modified && <em>Faculty modified</em>}
                   <button
                     className="table-action"
@@ -770,6 +836,26 @@ export function WorkflowResultPanel({
                               <span>Quality score {question.quality_score}/100</span>
                             )}
                           </div>
+                          {question.quality_dimensions && (
+                            <dl
+                              aria-label="Question quality dimensions"
+                              className="question-quality-dimensions"
+                            >
+                              {QUALITY_DIMENSIONS.map(([key, label]) => {
+                                const score = question.quality_dimensions?.[key];
+                                if (score == null) return null;
+                                return (
+                                  <div
+                                    className={score < 85 ? "quality-dimension-low" : undefined}
+                                    key={key}
+                                  >
+                                    <dt>{label}</dt>
+                                    <dd>{score}</dd>
+                                  </div>
+                                );
+                              })}
+                            </dl>
+                          )}
                           {question.findings.length > 0 ? (
                             <ul className="question-review-findings">
                               {question.findings.map((finding, index) => (
@@ -843,7 +929,8 @@ export function WorkflowResultPanel({
                     </div>
                   )}
                 </li>
-              ))}
+                );
+              })}
             </ol>
           )}
         </section>

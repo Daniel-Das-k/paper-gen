@@ -607,6 +607,7 @@ def _demo_validated_question(
         accepted=question.accepted,
         findings=question.findings,
         quality_score=question.quality_score,
+        quality_dimensions=question.quality_dimensions,
         observed_bloom_level=question.observed_bloom_level,
     )
 
@@ -699,6 +700,7 @@ async def regenerate_demo_question(
         question.accepted = regenerated.accepted
         question.faculty_modified = True
         question.quality_score = regenerated.quality_score
+        question.quality_dimensions = regenerated.quality_dimensions
         question.findings = regenerated.findings
         answer.answer = candidate.answer
         answer.criteria = candidate.marking_scheme

@@ -73,6 +73,83 @@ def test_valid_candidate_passes_deterministic_gates() -> None:
     assert result.findings == []
 
 
+def test_two_mark_question_with_labelled_subparts_is_rejected() -> None:
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id="short-1",
+        question_text="(i) Define normalization.\n(ii) State one advantage.",
+        answer="Normalization reduces redundancy and improves consistency.",
+        marks=2,
+        bloom_level=BloomLevel.REMEMBER,
+        bloom_justification="Recall.",
+        marking_scheme=[MarkingCriterion(criterion="Complete response", marks=2)],
+        evidence=SourceEvidence(page_numbers=[1], excerpts=["Normalization source."]),
+        confidence=0.90,
+        estimated_answer_minutes=2,
+    )
+
+    result = QuestionValidator().validate(_slot(), candidate, _manifest())
+
+    assert "short_question_has_subparts" in {
+        finding.code for finding in result.findings
+    }
+
+
+def test_long_answer_reports_weak_scheme_answer_and_time_estimate() -> None:
+    slot = _slot().model_copy(update={"marks": 10})
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id=slot.slot_id,
+        question_text=(
+            "Analyze the normalization process and justify the selected decomposition "
+            "by showing the required dependency-preservation reasoning steps."
+        ),
+        answer="A short answer.",
+        marks=10,
+        bloom_level=slot.bloom_level,
+        bloom_justification="Recall.",
+        marking_scheme=[MarkingCriterion(criterion="Complete response", marks=10)],
+        evidence=SourceEvidence(page_numbers=[1], excerpts=["Normalization source."]),
+        confidence=0.90,
+        estimated_answer_minutes=2,
+    )
+
+    result = QuestionValidator().validate(slot, candidate, _manifest())
+    codes = {finding.code for finding in result.findings}
+
+    assert result.accepted
+    assert {
+        "rubric_lacks_granularity",
+        "answer_too_brief_for_marks",
+        "answer_time_mismatch",
+    }.issubset(codes)
+
+
+def test_duplicate_marking_criteria_are_rejected() -> None:
+    candidate = QuestionCandidate(
+        candidate_id="q1",
+        slot_id="short-1",
+        question_text="Define database normalization.",
+        answer="Normalization organizes data to reduce redundancy.",
+        marks=2,
+        bloom_level=BloomLevel.REMEMBER,
+        bloom_justification="Recall.",
+        marking_scheme=[
+            MarkingCriterion(criterion="Correct definition", marks=1),
+            MarkingCriterion(criterion="Correct definition", marks=1),
+        ],
+        evidence=SourceEvidence(page_numbers=[1], excerpts=["Normalization source."]),
+        confidence=0.90,
+    )
+
+    result = QuestionValidator().validate(_slot(), candidate, _manifest())
+
+    assert not result.accepted
+    assert "duplicate_marking_criteria" in {
+        finding.code for finding in result.findings
+    }
+
+
 def test_unrendered_student_notation_is_rejected() -> None:
     candidate = QuestionCandidate(
         candidate_id="q1",

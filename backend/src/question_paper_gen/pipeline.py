@@ -30,6 +30,7 @@ from .models import (
     PaperPattern,
     QuestionCandidate,
     QuestionKind,
+    QuestionQualityDimensions,
     SourceEvidence,
     ValidatedQuestion,
     ValidationFinding,
@@ -843,10 +844,18 @@ class PaperGenerationPipeline:
                 {
                     "slot_id": slot.slot_id,
                     "section_id": slot.section_id,
+                    "unit": slot.unit,
                     "topic": topics.get(slot.topic_id, slot.topic_id),
+                    "facet": slot.facet,
                     "question_kind": slot.question_kind.value,
                     "marks": slot.marks,
                     "bloom_level": slot.bloom_level.value,
+                    "expected_answer_minutes_range": [
+                        max(1, round(slot.marks * 1.0)),
+                        max(2, round(slot.marks * 2.0)),
+                    ],
+                    "has_internal_choice": slot.has_internal_choice,
+                    "requires_visual": slot.requires_visual,
                 }
                 for slot in slots
             ],
@@ -1373,16 +1382,54 @@ class PaperGenerationPipeline:
                     ),
                 )
             )
-        if review.quality_score < self.minimum_final_quality_score:
+        quality_dimensions = self._calibrated_quality_dimensions(
+            review,
+            has_visual=bool(deterministic.candidate.evidence.visual_asset_id),
+        )
+        dimension_scores = [
+            quality_dimensions.grounding,
+            quality_dimensions.correctness,
+            quality_dimensions.clarity,
+            quality_dimensions.marks_fit,
+            quality_dimensions.bloom_alignment,
+            quality_dimensions.originality,
+            quality_dimensions.answer_scheme,
+        ]
+        if quality_dimensions.visual_relevance is not None:
+            dimension_scores.append(quality_dimensions.visual_relevance)
+        critical_scores = [
+            quality_dimensions.grounding,
+            quality_dimensions.correctness,
+            quality_dimensions.marks_fit,
+            quality_dimensions.originality,
+            quality_dimensions.answer_scheme,
+        ]
+        calibrated_quality_score = min(
+            review.quality_score,
+            round(sum(dimension_scores) / len(dimension_scores)),
+            min(critical_scores) if min(critical_scores) < 70 else 100,
+        )
+        if quality_dimensions.originality < 70:
+            findings.append(
+                ValidationFinding(
+                    code="weak_originality",
+                    severity=ValidationSeverity.ERROR,
+                    message=(
+                        f"originality score {quality_dimensions.originality}/100; "
+                        "replace the underlying assessed task rather than changing only wording or values"
+                    ),
+                )
+            )
+        if calibrated_quality_score < self.minimum_final_quality_score:
             findings.append(
                 ValidationFinding(
                     code="quality_score_below_threshold",
                     severity=ValidationSeverity.WARNING,
                     message=(
-                        f"final quality score {review.quality_score}/100 is below 85"
+                        f"final quality score {calibrated_quality_score}/100 is below 85"
                         if self.minimum_final_quality_score == 85
                         else (
-                            f"final quality score {review.quality_score}/100 is below "
+                            f"final quality score {calibrated_quality_score}/100 is below "
                             f"{self.minimum_final_quality_score}"
                         )
                     ),
@@ -1428,9 +1475,61 @@ class PaperGenerationPipeline:
                     for finding in findings
                 ),
                 "findings": deterministic.findings + findings,
-                "quality_score": review.quality_score,
+                "quality_score": calibrated_quality_score,
+                "quality_dimensions": quality_dimensions,
                 "observed_bloom_level": observed_bloom,
             }
+        )
+
+    @staticmethod
+    def _calibrated_quality_dimensions(
+        review: SemanticReview | SectionQuestionReview,
+        *,
+        has_visual: bool,
+    ) -> QuestionQualityDimensions:
+        """Turn reviewer output into conservative dimensions.
+
+        A reviewer cannot award a high dimension while its corresponding Boolean
+        gate failed. Older providers/tests that omit dimensions receive transparent
+        scores derived from the same independent checks.
+        """
+        supplied = review.quality_dimensions
+
+        def score(name: str, passed: bool, *, pass_default: int = 100) -> int:
+            supplied_value = getattr(supplied, name) if supplied is not None else None
+            value = supplied_value if supplied_value is not None else pass_default
+            return min(value, 45) if not passed else value
+
+        return QuestionQualityDimensions(
+            grounding=score("grounding", review.grounded_in_evidence),
+            correctness=score(
+                "correctness", review.answer_correct and review.subject_accuracy
+            ),
+            clarity=score("clarity", review.wording_clear),
+            marks_fit=score(
+                "marks_fit",
+                review.difficulty_appropriate and review.pedagogical_quality,
+            ),
+            bloom_alignment=score(
+                "bloom_alignment",
+                review.bloom_level_correct,
+                pass_default=100,
+            ),
+            originality=(
+                supplied.originality if supplied is not None else 100
+            ),
+            answer_scheme=score(
+                "answer_scheme",
+                review.answer_correct and review.marking_scheme_valid,
+            ),
+            visual_relevance=(
+                score(
+                    "visual_relevance",
+                    review.visual_consistent and review.visual_necessary,
+                )
+                if has_visual
+                else None
+            ),
         )
 
     @staticmethod
