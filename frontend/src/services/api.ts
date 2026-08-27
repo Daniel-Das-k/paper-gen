@@ -138,6 +138,7 @@ export async function createDemoGenerationJob(
   courseOutcomes: string[],
   setCount: number,
   details: DemoExamDetails,
+  generatedBy: string,
 ): Promise<DemoJob> {
   const body = new FormData();
   uploads.forEach((upload) => body.append("files", upload.file));
@@ -159,6 +160,8 @@ export async function createDemoGenerationJob(
   body.append("year", details.year);
   body.append("semester", details.semester);
   body.append("exam_date", details.examDate);
+  body.append("department", "Computer Science and Engineering");
+  body.append("generated_by", generatedBy);
   const response = await fetch(`${API_BASE_URL}/v1/demo/jobs/generate-units`, {
     method: "POST",
     body,
@@ -278,8 +281,9 @@ export async function updateDemoHeader(
 export async function transitionDemoPaper(
   paperId: string,
   actorRole: DemoRole,
-  action: "submit" | "approve" | "return",
+  action: "finalize" | "submit" | "approve" | "return" | "accept" | "decline",
   comment: string,
+  selectedSetLabel?: string,
 ): Promise<DemoPaperRecord> {
   const response = await fetch(
     `${API_BASE_URL}/v1/demo/papers/${encodeURIComponent(paperId)}/transition`,
@@ -290,6 +294,7 @@ export async function transitionDemoPaper(
         actor_role: actorRole,
         action,
         comment,
+        selected_set_label: selectedSetLabel,
       }),
     },
   );

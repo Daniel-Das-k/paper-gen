@@ -130,6 +130,7 @@ class FullWorkflowResponse(PreparationResponse):
     #: cell can hand to different rows of a hall.
     sets: list[GeneratedSet] = Field(default_factory=list)
     cross_set_warnings: list[str] = Field(default_factory=list)
+    selected_set_label: str | None = None
 
 
 class PreparedGenerationRequest(BaseModel):
@@ -153,6 +154,7 @@ class DemoTransitionRequest(BaseModel):
     actor_role: str
     action: str
     comment: str = ""
+    selected_set_label: str | None = None
 
 
 class DemoHeaderUpdate(BaseModel):
@@ -257,7 +259,10 @@ def get_pattern_by_id(pattern_id: str) -> PaperPattern:
 
 @app.get("/v1/generated-papers/{filename}")
 def download_generated_paper(filename: str) -> FileResponse:
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*\.(?:pdf|docx)", filename):
+    # Generated timestamps intentionally contain uppercase ``T`` and ``Z``.
+    # Keep the allow-list strict while accepting the filenames produced by
+    # ``save_demo_edited_outputs`` and ``save_generated_paper``.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*\.(?:pdf|docx)", filename):
         raise HTTPException(status_code=404, detail="generated paper not found")
     output_root = default_pdf_output_directory().resolve()
     path = (output_root / filename).resolve()
@@ -334,9 +339,10 @@ def _apply_demo_header(
         }
     )
     result.paper = result.paper.model_copy(update={"exam_header": header})
-    if result.sets:
-        first = result.sets[0]
-        first.paper = first.paper.model_copy(update={"exam_header": header})
+    for generated_set in result.sets:
+        generated_set.paper = generated_set.paper.model_copy(
+            update={"exam_header": header}
+        )
     return result
 
 
@@ -467,6 +473,8 @@ async def create_demo_generation_job(
     year: str = Form(""),
     semester: str = Form(""),
     exam_date: str = Form(""),
+    department: str = Form("Computer Science and Engineering"),
+    generated_by: str = Form("Faculty User"),
 ) -> dict[str, object]:
     specs = _parse_unit_specs(units, len(files))
     _resolve_pattern(pattern_id)
@@ -479,6 +487,8 @@ async def create_demo_generation_job(
         "year": year.strip(),
         "semester": semester.strip(),
         "exam_date": exam_date.strip(),
+        "department": department.strip(),
+        "generated_by": generated_by.strip(),
         "exam_label": get_pattern(pattern_id).name,
     }
     job = demo_store.create_job(metadata)
@@ -768,13 +778,22 @@ def transition_demo_paper(
     role = request.actor_role.strip().lower()
     action = request.action.strip().lower()
     if role not in {"faculty", "hod", "coe"} or action not in {
+        "finalize",
         "submit",
         "approve",
         "return",
+        "accept",
+        "decline",
     }:
         raise HTTPException(status_code=422, detail="invalid demo workflow action")
     try:
-        return demo_store.transition(paper_id, role, action, request.comment)
+        return demo_store.transition(
+            paper_id,
+            role,
+            action,
+            request.comment,
+            selected_set_label=request.selected_set_label,
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="demo paper not found") from None
     except ValueError as exc:

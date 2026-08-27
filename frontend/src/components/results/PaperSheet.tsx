@@ -169,12 +169,7 @@ export function PaperSheet({ result, pattern, details }: PaperSheetProps) {
                       question.bloom_level) as BloomLevel
                   ];
                 return (
-                  <li
-                    className={
-                      question.accepted ? "sheet-q" : "sheet-q sheet-q-flagged"
-                    }
-                    key={question.question_id}
-                  >
+                  <li className="sheet-q" key={question.question_id}>
                     <span className="sheet-q-number">
                       {question.question_number}
                     </span>

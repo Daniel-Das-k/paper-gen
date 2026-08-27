@@ -83,6 +83,20 @@ class DemoStore:
                     ON activities(paper_id, id);
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(papers)").fetchall()
+            }
+            for column, definition in (
+                ("year", "TEXT NOT NULL DEFAULT ''"),
+                ("semester", "TEXT NOT NULL DEFAULT ''"),
+                ("department", "TEXT NOT NULL DEFAULT ''"),
+                ("generated_by", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if column not in existing_columns:
+                    connection.execute(
+                        f"ALTER TABLE papers ADD COLUMN {column} {definition}"
+                    )
             connection.execute(
                 """
                 UPDATE jobs
@@ -161,8 +175,9 @@ class DemoStore:
                 """
                 INSERT INTO papers
                     (id, pattern_id, subject, course_code, course_name,
-                     exam_label, status, result_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
+                     exam_label, year, semester, department, generated_by,
+                     status, result_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)
                 """,
                 (
                     paper_id,
@@ -171,6 +186,10 @@ class DemoStore:
                     str(metadata.get("course_code", "")),
                     course_name,
                     str(metadata.get("exam_label", "")),
+                    str(metadata.get("year", "")),
+                    str(metadata.get("semester", "")),
+                    str(metadata.get("department", "")),
+                    str(metadata.get("generated_by", "Faculty User")),
                     json.dumps(result),
                     timestamp,
                     timestamp,
@@ -190,9 +209,27 @@ class DemoStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, pattern_id, subject, course_code, course_name,
-                       exam_label, status, created_at, updated_at
-                FROM papers ORDER BY updated_at DESC
+                SELECT p.id, p.pattern_id, p.subject, p.course_code, p.course_name,
+                       p.exam_label, p.year, p.semester, p.department,
+                       p.generated_by, p.status, p.created_at, p.updated_at,
+                       COALESCE(
+                           (SELECT action FROM activities
+                            WHERE paper_id = p.id ORDER BY id DESC LIMIT 1),
+                           ''
+                       ) AS last_action,
+                       EXISTS(
+                           SELECT 1 FROM activities
+                           WHERE paper_id = p.id
+                             AND actor_role = 'hod'
+                             AND action = 'approve'
+                       ) AS hod_approved,
+                       COALESCE(
+                           (SELECT action FROM activities
+                            WHERE paper_id = p.id AND actor_role = 'coe'
+                            ORDER BY id DESC LIMIT 1),
+                           ''
+                       ) AS last_coe_action
+                FROM papers AS p ORDER BY p.updated_at DESC
                 """
             ).fetchall()
         return [dict(row) for row in rows]
@@ -214,6 +251,21 @@ class DemoStore:
         payload = dict(row)
         payload["result"] = json.loads(payload.pop("result_json"))
         payload["activities"] = [dict(activity) for activity in activities]
+        payload["last_action"] = (
+            payload["activities"][-1]["action"] if payload["activities"] else ""
+        )
+        payload["hod_approved"] = any(
+            activity["actor_role"] == "hod" and activity["action"] == "approve"
+            for activity in payload["activities"]
+        )
+        payload["last_coe_action"] = next(
+            (
+                activity["action"]
+                for activity in reversed(payload["activities"])
+                if activity["actor_role"] == "coe"
+            ),
+            "",
+        )
         return payload
 
     def save_result(
@@ -248,14 +300,23 @@ class DemoStore:
         return self.get_paper(paper_id)
 
     def transition(
-        self, paper_id: str, actor_role: str, action: str, comment: str
+        self,
+        paper_id: str,
+        actor_role: str,
+        action: str,
+        comment: str,
+        *,
+        selected_set_label: str | None = None,
     ) -> dict[str, Any]:
         transitions = {
-            ("draft", "faculty", "submit"): "submitted_to_hod",
+            ("draft", "faculty", "finalize"): "faculty_finalized",
+            ("faculty_finalized", "faculty", "submit"): "submitted_to_hod",
             ("submitted_to_hod", "hod", "approve"): "submitted_to_coe",
             ("submitted_to_hod", "hod", "return"): "draft",
             ("submitted_to_coe", "coe", "approve"): "approved",
             ("submitted_to_coe", "coe", "return"): "draft",
+            ("submitted_to_coe", "coe", "accept"): "approved",
+            ("submitted_to_coe", "coe", "decline"): "draft",
         }
         timestamp = _now()
         with self._connect() as connection:
@@ -269,15 +330,44 @@ class DemoStore:
                 raise ValueError(
                     f"{actor_role} cannot {action} a paper in {row['status']}"
                 )
-            if action == "submit":
-                result = json.loads(row["result_json"])
-                if not result.get("paper", {}).get("publication_ready", False):
-                    raise ValueError(
-                        "Resolve every blocking question finding before submission"
+            result = json.loads(row["result_json"])
+            if actor_role == "hod" and action == "approve":
+                sets = result.get("sets", [])
+                if len(sets) > 1:
+                    requested = (selected_set_label or "").strip().upper()
+                    selected = next(
+                        (
+                            candidate
+                            for candidate in sets
+                            if str(candidate.get("set_label", "")).upper()
+                            == requested
+                        ),
+                        None,
                     )
+                    if selected is None:
+                        raise ValueError(
+                            "HOD must select one generated set before forwarding to CoE"
+                        )
+                    result["selected_set_label"] = requested
+                    for key in (
+                        "paper",
+                        "blueprint",
+                        "answer_key",
+                        "pdf_download_url",
+                        "scheme_download_url",
+                    ):
+                        result[key] = selected[key]
+                    # Only Set A currently has an editable Word export. Do not
+                    # expose that file after the HOD has selected another set.
+                    if requested != "A":
+                        result["docx_download_url"] = None
             connection.execute(
-                "UPDATE papers SET status = ?, updated_at = ? WHERE id = ?",
-                (target, timestamp, paper_id),
+                """
+                UPDATE papers
+                SET status = ?, result_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (target, json.dumps(result), timestamp, paper_id),
             )
             connection.execute(
                 """
@@ -288,4 +378,3 @@ class DemoStore:
                 (paper_id, actor_role, action, comment.strip(), timestamp),
             )
         return self.get_paper(paper_id)
-

@@ -351,21 +351,18 @@ export function UploadPanel({
         </div>
 
         <div className="field-group">
-          <label htmlFor="set-count-select">Number of sets</label>
+          <label htmlFor="set-count-select">Candidate sets</label>
           <select
-            disabled={loading}
+            disabled
             id="set-count-select"
             onChange={(event) => onSetCountChange(Number(event.target.value))}
             value={setCount}
           >
-            <option value={1}>One paper</option>
-            <option value={2}>Two sets — A and B</option>
             <option value={3}>Three sets — A, B and C</option>
           </select>
           <p>
-            Interchangeable papers for the same exam: identical marks, units and
-            cognitive levels, different questions. Each set costs another
-            generation and review pass.
+            Faculty generates three equivalent candidates. The HOD compares them
+            and forwards one selected set to the CoE.
           </p>
         </div>
       </div>

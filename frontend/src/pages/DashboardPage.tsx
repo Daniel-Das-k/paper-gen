@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   AppHeader,
+  DEMO_VIEW_PATHS,
   type DemoView,
 } from "../components/layout/AppHeader";
 import { DemoDashboard } from "../components/demo/DemoDashboard";
@@ -19,7 +20,7 @@ import type {
   DemoJob,
   DemoPaperRecord,
   DemoPaperSummary,
-  DemoRole,
+  DemoUser,
   UnitUpload,
 } from "../types/api";
 
@@ -60,7 +61,7 @@ function createExamWorkspaces(): Record<PatternId, ExamWorkspace> {
       pattern.id,
       {
         unitUploads: createUnitUploads(pattern.id),
-        setCount: 1,
+        setCount: 3,
         error: null,
       },
     ]),
@@ -68,12 +69,23 @@ function createExamWorkspaces(): Record<PatternId, ExamWorkspace> {
 }
 
 interface DashboardPageProps {
+  view: DemoView;
+  paperId?: string;
+  user: DemoUser;
+  onNavigate: (path: string, replace?: boolean) => void;
+  onLogout: () => void;
   onExitDemo: () => void;
 }
 
-export function DashboardPage({ onExitDemo }: DashboardPageProps) {
-  const [view, setView] = useState<DemoView>("dashboard");
-  const [role, setRole] = useState<DemoRole>("faculty");
+export function DashboardPage({
+  view,
+  paperId,
+  user,
+  onNavigate,
+  onLogout,
+  onExitDemo,
+}: DashboardPageProps) {
+  const role = user.role;
   const [patternId, setPatternId] = useState<PatternId>(
     "autonomous-semester-100",
   );
@@ -117,6 +129,37 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
     if (view !== "create") void loadPapers();
   }, [loadPapers, view]);
 
+  useEffect(() => {
+    if (view === "create" && !paperId && role !== "faculty") {
+      onNavigate("/demo/dashboard", true);
+    }
+  }, [onNavigate, paperId, role, view]);
+
+  useEffect(() => {
+    if (!paperId) {
+      if (view === "create") setRecord(null);
+      return;
+    }
+
+    let active = true;
+    setRecord(null);
+    setPapersError(null);
+    void getDemoPaper(paperId)
+      .then((loaded) => {
+        if (active) setRecord(loaded);
+      })
+      .catch((cause) => {
+        if (!active) return;
+        setPapersError(
+          cause instanceof Error ? cause.message : "Could not open the paper.",
+        );
+        onNavigate("/demo/papers", true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [onNavigate, paperId, view]);
+
   useEffect(
     () => () => {
       if (pollRef.current !== null) window.clearTimeout(pollRef.current);
@@ -124,17 +167,8 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
     [],
   );
 
-  const openPaper = async (paperId: string) => {
-    setPapersError(null);
-    try {
-      const loaded = await getDemoPaper(paperId);
-      setRecord(loaded);
-      setView("create");
-    } catch (cause) {
-      setPapersError(
-        cause instanceof Error ? cause.message : "Could not open the paper.",
-      );
-    }
+  const openPaper = (paperId: string) => {
+    onNavigate(`/demo/papers/${encodeURIComponent(paperId)}`);
   };
 
   const pollJob = async (jobId: string) => {
@@ -142,8 +176,8 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
       const next = await getDemoJob(jobId);
       setJob(next);
       if (next.status === "completed" && next.paper_id) {
-        setRecord(await getDemoPaper(next.paper_id));
         await loadPapers();
+        onNavigate(`/demo/papers/${encodeURIComponent(next.paper_id)}`);
         return;
       }
       if (next.status === "failed") {
@@ -206,6 +240,7 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
         courseOutcomes.filter((outcome) => outcome.trim()),
         requested.setCount,
         examDetails,
+        user.displayName,
       );
       setJob(started);
       void pollJob(started.id);
@@ -225,17 +260,28 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
       unitUploads: createUnitUploads(patternId),
       error: null,
     });
-    setView("create");
+    onNavigate("/demo/generate");
+  };
+
+  const changeView = (nextView: DemoView) => {
+    if (nextView === "create") setRecord(null);
+    onNavigate(DEMO_VIEW_PATHS[nextView]);
   };
 
   return (
     <div className="app-shell demo-shell">
       <AppHeader
         onExitDemo={onExitDemo}
-        onRoleChange={setRole}
-        onViewChange={setView}
-        role={role}
-        view={view}
+        onLogout={onLogout}
+        onViewChange={changeView}
+        user={user}
+        view={
+          paperId
+            ? record?.status === "draft"
+              ? "queue"
+              : "history"
+            : view
+        }
       />
 
       {view === "dashboard" ? (
@@ -244,28 +290,33 @@ export function DashboardPage({ onExitDemo }: DashboardPageProps) {
           job={job}
           loading={papersLoading}
           onCreate={startNew}
-          onOpen={(paperId) => void openPaper(paperId)}
-          onQueue={() => setView("queue")}
+          onOpen={openPaper}
+          onQueue={() => onNavigate("/demo/review")}
           onRefresh={() => void loadPapers()}
           papers={papers}
-          role={role}
+          user={user}
         />
       ) : view === "queue" || view === "history" ? (
         <PaperListPage
           error={papersError}
           loading={papersLoading}
           mode={view}
-          onOpen={(paperId) => void openPaper(paperId)}
+          onOpen={openPaper}
           onRefresh={() => void loadPapers()}
           papers={papers}
-          role={role}
+          user={user}
         />
+      ) : paperId && !record ? (
+        <main className="demo-page page-container">
+          <p className="demo-list-empty" aria-live="polite">
+            Loading question paper…
+          </p>
+        </main>
       ) : record ? (
         <main className="demo-page page-container">
           <WorkflowResultPanel
             key={record.id}
             onRecordChange={setRecord}
-            onReset={startNew}
             record={record}
             role={role}
           />

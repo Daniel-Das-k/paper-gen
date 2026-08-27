@@ -15,7 +15,7 @@ import {
   transitionDemoPaper,
   updateDemoHeader,
 } from "../../services/api";
-import { AlertIcon, CheckIcon } from "../icons/Icons";
+import { AlertIcon } from "../icons/Icons";
 import { PaperSheet, type ExamDetails } from "./PaperSheet";
 
 // Everything on a Rajalakshmi paper that does not change between subjects is
@@ -86,12 +86,12 @@ interface WorkflowResultPanelProps {
   record: DemoPaperRecord;
   role: DemoRole;
   onRecordChange: (record: DemoPaperRecord) => void;
-  onReset: () => void;
 }
 
 const STATUS_LABELS: Record<DemoPaperStatus, string> = {
   draft: "Faculty draft",
   submitted_to_hod: "Waiting for HOD review",
+  faculty_finalized: "Ready to send to HOD",
   submitted_to_coe: "Waiting for CoE review",
   approved: "Approved and locked",
 };
@@ -161,7 +161,6 @@ export function WorkflowResultPanel({
   record,
   role,
   onRecordChange,
-  onReset,
 }: WorkflowResultPanelProps) {
   const result = record.result;
   const patternId = result.blueprint.pattern_id;
@@ -172,6 +171,10 @@ export function WorkflowResultPanel({
   );
   const [editingHeader, setEditingHeader] = useState(false);
   const [workflowComment, setWorkflowComment] = useState("");
+  const [selectedSetLabel, setSelectedSetLabel] = useState(
+    result.selected_set_label ??
+      (role === "hod" ? "" : result.sets?.[0]?.set_label ?? ""),
+  );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
@@ -268,7 +271,9 @@ export function WorkflowResultPanel({
     }
   };
 
-  const runTransition = async (action: "submit" | "approve" | "return") => {
+  const runTransition = async (
+    action: "finalize" | "submit" | "approve" | "return" | "accept" | "decline",
+  ) => {
     setBusy(true);
     setActionError(null);
     try {
@@ -277,6 +282,7 @@ export function WorkflowResultPanel({
         role,
         action,
         workflowComment,
+        role === "hod" && action === "approve" ? selectedSetLabel : undefined,
       );
       onRecordChange(updated);
       setWorkflowComment("");
@@ -359,9 +365,58 @@ export function WorkflowResultPanel({
   };
 
   const canEdit = role === "faculty" && record.status === "draft";
-  const canSubmit = canEdit;
+  const canFinalize = canEdit;
+  const canSubmit = role === "faculty" && record.status === "faculty_finalized";
   const canHodReview = role === "hod" && record.status === "submitted_to_hod";
   const canCoeReview = role === "coe" && record.status === "submitted_to_coe";
+  const facultyFinalView = role === "faculty" && record.status !== "draft";
+
+  if (facultyFinalView) {
+    return (
+      <section
+        aria-labelledby="official-paper-title"
+        className="faculty-official-paper"
+      >
+        <div className="demo-workflow-bar">
+          <div>
+            <span>Question paper status</span>
+            <strong>{STATUS_LABELS[record.status]}</strong>
+          </div>
+          <div className="result-actions">
+            {canSubmit && (
+              <button
+                className="primary-button"
+                disabled={busy}
+                onClick={() => void runTransition("submit")}
+                type="button"
+              >
+                Send to HOD
+              </button>
+            )}
+            <a
+              className={canSubmit ? "secondary-button" : "primary-button"}
+              download
+              href={getApiUrl(result.pdf_download_url)}
+            >
+              Download question paper
+            </a>
+          </div>
+        </div>
+        <div className="faculty-official-heading">
+          <div>
+            <h1 id="official-paper-title">Question paper</h1>
+            <p>
+              {canSubmit
+                ? "This paper is locked. Review its official format, then send it to the HOD when ready."
+                : "This paper is locked while it moves through approval. If a reviewer returns it, it will move back to Drafts."}
+            </p>
+          </div>
+        </div>
+        {actionError && <div className="request-error" role="alert">{actionError}</div>}
+        <PaperSheet details={details} pattern={pattern} result={result} />
+      </section>
+    );
+  }
 
   return (
     <section aria-labelledby="review-title" className="workspace-panel result-panel">
@@ -370,7 +425,7 @@ export function WorkflowResultPanel({
           <span>Demo approval status</span>
           <strong>{STATUS_LABELS[record.status]}</strong>
         </div>
-        {(canSubmit || canHodReview || canCoeReview) && (
+        {(canFinalize || canHodReview || canCoeReview) && (
           <div className="demo-workflow-actions">
             {(canHodReview || canCoeReview) && (
               <input
@@ -381,14 +436,14 @@ export function WorkflowResultPanel({
                 value={workflowComment}
               />
             )}
-            {canSubmit && (
+            {canFinalize && (
               <button
                 className="primary-button"
-                disabled={busy || !result.paper.publication_ready}
-                onClick={() => void runTransition("submit")}
+                disabled={busy}
+                onClick={() => void runTransition("finalize")}
                 type="button"
               >
-                Submit to HOD
+                {busy ? "Finishing…" : "Done"}
               </button>
             )}
             {(canHodReview || canCoeReview) && (
@@ -396,18 +451,27 @@ export function WorkflowResultPanel({
                 <button
                   className="secondary-button"
                   disabled={busy || !workflowComment.trim()}
-                  onClick={() => void runTransition("return")}
+                  onClick={() =>
+                    void runTransition(canCoeReview ? "decline" : "return")
+                  }
                   type="button"
                 >
-                  Return to faculty
+                  {canCoeReview ? "Decline and return" : "Return to faculty"}
                 </button>
                 <button
                   className="primary-button"
-                  disabled={busy}
-                  onClick={() => void runTransition("approve")}
+                  disabled={
+                    busy ||
+                    (canHodReview &&
+                      (result.sets?.length ?? 0) > 1 &&
+                      !selectedSetLabel)
+                  }
+                  onClick={() =>
+                    void runTransition(canCoeReview ? "accept" : "approve")
+                  }
                   type="button"
                 >
-                  {canHodReview ? "Approve for CoE" : "Final approval"}
+                  {canHodReview ? "Select set and forward" : "Accept paper"}
                 </button>
               </>
             )}
@@ -421,13 +485,23 @@ export function WorkflowResultPanel({
       )}
       <div className="panel-heading result-heading">
         <div>
-          <h2 id="review-title">Review the draft paper</h2>
+          <h2 id="review-title">
+            {role === "faculty"
+              ? "Review your draft paper"
+              : role === "hod"
+                ? "Department paper review"
+                : "Final examination decision"}
+          </h2>
           <p>
             {accepted} of {questions.length} questions passed automated review.
-            Every paper needs your approval before it reaches the exam cell.
+            {role === "faculty"
+              ? " Review any findings, then select Done to accept the draft and create the locked question paper."
+              : role === "hod"
+                ? " Compare the candidate sets, select one, and forward it to the CoE."
+                : " Review the HOD-selected set before accepting or declining it."}
           </p>
         </div>
-        <div className="result-actions">
+        {!canEdit && <div className="result-actions">
           <a
             className="primary-button"
             download
@@ -437,26 +511,7 @@ export function WorkflowResultPanel({
               ? "Download paper"
               : "Download draft"}
           </a>
-          <a
-            className="secondary-button"
-            download
-            href={getApiUrl(result.scheme_download_url)}
-          >
-            Download scheme of evaluation
-          </a>
-          {result.docx_download_url && (
-            <a
-              className="secondary-button"
-              download
-              href={getApiUrl(result.docx_download_url)}
-            >
-              Download Word paper
-            </a>
-          )}
-          <button className="secondary-button" onClick={onReset} type="button">
-            Start a new paper
-          </button>
-        </div>
+        </div>}
       </div>
 
       <div className="result-summary">
@@ -487,18 +542,7 @@ export function WorkflowResultPanel({
         </div>
       </div>
 
-      {result.paper.publication_ready ? (
-        <div className="notice notice-success">
-          <CheckIcon />
-          <div>
-            <strong>All questions passed automated review</strong>
-            <p>
-              Grounding, marks, and cognitive level were checked question by
-              question. Approve the paper before examination use.
-            </p>
-          </div>
-        </div>
-      ) : (
+      {!result.paper.publication_ready && (
         <div className="notice notice-warning publication-gate">
           <AlertIcon />
           <div>
@@ -508,32 +552,52 @@ export function WorkflowResultPanel({
             </strong>
             <p>
               Each flagged question now shows why it needs review. Add a faculty
-              instruction to regenerate it, or edit the question and scheme directly.
+              instruction to regenerate it, edit it directly, or select Done if
+              you have reviewed and accept it as written.
             </p>
           </div>
         </div>
       )}
 
-      {(result.sets?.length ?? 0) > 1 && (
+      {!canEdit && (result.sets?.length ?? 0) > 1 && (
         <section aria-labelledby="sets-title" className="bloom-coverage">
           <div className="bloom-coverage-heading">
             <h3 id="sets-title">Sets for this exam</h3>
             <p>
-              Interchangeable papers with identical marks, units and cognitive
-              levels. The review below shows Set A.
+              {canHodReview
+                ? "Compare the three equivalent sets and select exactly one to forward to the CoE."
+                : result.selected_set_label
+                  ? `The HOD selected Set ${result.selected_set_label} for final review.`
+                  : "Interchangeable papers with identical marks, units and cognitive levels."}
             </p>
           </div>
           <ol className="set-list">
             {result.sets?.map((generated) => (
-              <li key={generated.pdf_download_url}>
-                <span className="set-tag">
-                  Set {generated.set_label ?? "—"}
-                </span>
+              <li
+                className={
+                  selectedSetLabel === generated.set_label
+                    ? "set-list-selected"
+                    : undefined
+                }
+                key={generated.pdf_download_url}
+              >
+                {canHodReview ? (
+                  <label className="set-choice">
+                    <input
+                      checked={selectedSetLabel === generated.set_label}
+                      name="selected-paper-set"
+                      onChange={() =>
+                        setSelectedSetLabel(generated.set_label ?? "")
+                      }
+                      type="radio"
+                    />
+                    <strong>Set {generated.set_label ?? "—"}</strong>
+                  </label>
+                ) : (
+                  <span className="set-tag">Set {generated.set_label ?? "—"}</span>
+                )}
                 <a download href={getApiUrl(generated.pdf_download_url)}>
-                  Paper
-                </a>
-                <a download href={getApiUrl(generated.scheme_download_url)}>
-                  Scheme of evaluation
+                  Open paper
                 </a>
               </li>
             ))}
@@ -936,7 +1000,9 @@ export function WorkflowResultPanel({
         </section>
       )}
 
-      <PaperSheet details={details} pattern={pattern} result={result} />
+      {!canEdit && (
+        <PaperSheet details={details} pattern={pattern} result={result} />
+      )}
 
       {openAnswers.size > 0 && (
         <section className="answer-sheet">

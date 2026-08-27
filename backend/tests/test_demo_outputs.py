@@ -1,7 +1,9 @@
 import zipfile
 
 import fitz
+from fastapi.testclient import TestClient
 
+from question_paper_gen.api import app
 from question_paper_gen.models import (
     AnswerKeyEntry,
     BloomLevel,
@@ -16,6 +18,31 @@ from question_paper_gen.models import (
     QuestionPaperItem,
 )
 from question_paper_gen.outputs import save_demo_edited_outputs
+
+
+def test_generated_pdf_with_timestamp_downloads_as_attachment(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PDF_OUTPUT_DIR", str(tmp_path))
+    filename = f"demo-{'a' * 32}-20260827T061500000000Z.pdf"
+    payload = b"%PDF-1.7\nlocal demo paper\n%%EOF\n"
+    (tmp_path / filename).write_bytes(payload)
+
+    response = TestClient(app).get(f"/v1/generated-papers/{filename}")
+
+    assert response.status_code == 200
+    assert response.content == payload
+    assert response.headers["content-type"] == "application/pdf"
+    assert "attachment" in response.headers["content-disposition"]
+    assert filename in response.headers["content-disposition"]
+
+
+def test_generated_download_rejects_unsafe_filename(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PDF_OUTPUT_DIR", str(tmp_path))
+
+    response = TestClient(app).get("/v1/generated-papers/not_a_paper.pdf")
+
+    assert response.status_code == 404
 
 
 def test_demo_edit_recreates_paper_and_matching_scheme(monkeypatch, tmp_path) -> None:

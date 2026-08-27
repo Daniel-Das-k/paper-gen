@@ -1,4 +1,6 @@
-import type { DemoRole } from "../../types/api";
+import type { MouseEvent } from "react";
+
+import type { DemoUser } from "../../types/api";
 import {
   DashboardIcon,
   ExitIcon,
@@ -10,37 +12,77 @@ import {
 
 export type DemoView = "dashboard" | "create" | "queue" | "history";
 
+export const DEMO_VIEW_PATHS: Record<DemoView, string> = {
+  dashboard: "/demo/dashboard",
+  create: "/demo/generate",
+  queue: "/demo/review",
+  history: "/demo/papers",
+};
+
 interface AppHeaderProps {
   view: DemoView;
-  role: DemoRole;
+  user: DemoUser;
   onViewChange: (view: DemoView) => void;
-  onRoleChange: (role: DemoRole) => void;
+  onLogout: () => void;
   onExitDemo: () => void;
 }
 
-const ROLE_LABELS: Record<DemoRole, string> = {
+const ROLE_LABELS: Record<DemoUser["role"], string> = {
   faculty: "Faculty",
   hod: "HOD",
   coe: "CoE",
 };
 
+function navigateInApp(
+  event: MouseEvent<HTMLAnchorElement>,
+  navigate: () => void,
+) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return;
+  }
+  event.preventDefault();
+  navigate();
+}
+
 export function AppHeader({
   view,
-  role,
+  user,
   onViewChange,
-  onRoleChange,
+  onLogout,
   onExitDemo,
 }: AppHeaderProps) {
-  const navigation = [
-    ["dashboard", "Dashboard", DashboardIcon],
-    ["create", "Generate paper", UploadIcon],
-    ["queue", "Review queue", ReviewIcon],
-    ["history", "Question papers", HistoryIcon],
-  ] as const;
+  const navigation = ({
+    faculty: [
+      ["dashboard", "Faculty dashboard", DashboardIcon],
+      ["create", "Generate paper", UploadIcon],
+      ["queue", "Drafts", ReviewIcon],
+      ["history", "Generated papers", HistoryIcon],
+    ],
+    hod: [
+      ["dashboard", "Department dashboard", DashboardIcon],
+      ["queue", "Approval queue", ReviewIcon],
+      ["history", "Department papers", HistoryIcon],
+    ],
+    coe: [
+      ["dashboard", "CoE dashboard", DashboardIcon],
+      ["queue", "Final review", ReviewIcon],
+      ["history", "Decision history", HistoryIcon],
+    ],
+  } as const)[user.role];
 
   return (
     <aside className="app-sidebar">
-      <button className="demo-brand" onClick={onExitDemo} type="button">
+      <a
+        className="demo-brand"
+        href="/"
+        onClick={(event) => navigateInApp(event, onExitDemo)}
+      >
         <span aria-hidden="true" className="demo-brand-mark">
           <FileIcon />
         </span>
@@ -48,46 +90,42 @@ export function AppHeader({
           <strong>REC QP Studio</strong>
           <span>Rajalakshmi Engineering College</span>
         </span>
-      </button>
+      </a>
 
       <nav aria-label="Primary navigation" className="demo-nav">
         {navigation.map(([target, label, Icon]) => (
-            <button
+            <a
+              aria-current={view === target ? "page" : undefined}
               className={view === target ? "demo-nav-active" : ""}
+              href={DEMO_VIEW_PATHS[target]}
               key={target}
-              onClick={() => onViewChange(target)}
-              type="button"
+              onClick={(event) =>
+                navigateInApp(event, () => onViewChange(target))
+              }
             >
               <Icon />
               <span>{label}</span>
-            </button>
+            </a>
         ))}
       </nav>
 
       <div className="demo-sidebar-footer">
-        <label className="demo-role-select">
+        <div className="demo-role-select">
           <span className="demo-role-avatar" aria-hidden="true">
-            {ROLE_LABELS[role].slice(0, 1)}
+            {ROLE_LABELS[user.role].slice(0, 1)}
           </span>
           <span className="demo-role-copy">
-            <strong>Demo user</strong>
-            <span>Viewing as {ROLE_LABELS[role]}</span>
+            <strong>{user.displayName}</strong>
+            <span>{ROLE_LABELS[user.role]} demo account</span>
           </span>
-          <select
-            aria-label="Viewing role"
-            onChange={(event) => onRoleChange(event.target.value as DemoRole)}
-            value={role}
-          >
-            {(Object.keys(ROLE_LABELS) as DemoRole[]).map((value) => (
-              <option key={value} value={value}>
-                {ROLE_LABELS[value]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button className="demo-exit" onClick={onExitDemo} type="button">
+        </div>
+        <button
+          className="demo-exit"
+          onClick={onLogout}
+          type="button"
+        >
           <ExitIcon />
-          <span>Back to product site</span>
+          <span>Sign out</span>
         </button>
       </div>
     </aside>

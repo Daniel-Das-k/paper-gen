@@ -113,6 +113,7 @@ export interface FullWorkflowResponse extends PreparationResponse {
   answer_key?: AnswerKeyEntry[];
   sets?: GeneratedSet[];
   cross_set_warnings?: string[];
+  selected_set_label?: string | null;
   paper: {
     title: string;
     set_label?: string | null;
@@ -189,8 +190,14 @@ export interface ExamHeader {
 }
 
 export type DemoRole = "faculty" | "hod" | "coe";
+export interface DemoUser {
+  username: string;
+  displayName: string;
+  role: DemoRole;
+}
 export type DemoPaperStatus =
   | "draft"
+  | "faculty_finalized"
   | "submitted_to_hod"
   | "submitted_to_coe"
   | "approved";
@@ -213,6 +220,13 @@ export interface DemoPaperSummary {
   course_code: string;
   course_name: string;
   exam_label: string;
+  year: string;
+  semester: string;
+  department: string;
+  generated_by: string;
+  last_action: string;
+  hod_approved: boolean;
+  last_coe_action: string;
   status: DemoPaperStatus;
   created_at: string;
   updated_at: string;
