@@ -70,9 +70,9 @@ export function AppHeader({
       ["history", "Department papers", HistoryIcon],
     ],
     coe: [
-      ["dashboard", "CoE dashboard", DashboardIcon],
-      ["queue", "Final review", ReviewIcon],
-      ["history", "Decision history", HistoryIcon],
+      ["dashboard", "Examination overview", DashboardIcon],
+      ["queue", "Pending decisions", ReviewIcon],
+      ["history", "Decision records", HistoryIcon],
     ],
   } as const)[user.role];
 

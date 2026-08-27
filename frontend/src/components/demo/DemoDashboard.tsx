@@ -43,6 +43,14 @@ function academicYear(value: string): string {
   return "unspecified";
 }
 
+function academicYearLabel(value: string): string {
+  const normalized = academicYear(value);
+  if (normalized === "unspecified") return "Year not specified";
+  const suffix =
+    normalized === "1" ? "st" : normalized === "2" ? "nd" : normalized === "3" ? "rd" : "th";
+  return `${normalized}${suffix} year`;
+}
+
 function matchesQuery(paper: DemoPaperSummary, query: string): boolean {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;
@@ -248,22 +256,40 @@ function CoeDashboard({
 }: DemoDashboardProps) {
   const [query, setQuery] = useState("");
   const [year, setYear] = useState("all");
+  const [department, setDepartment] = useState("all");
+  const [examination, setExamination] = useState("all");
   const coePapers = papers.filter(
     (paper) =>
       ["submitted_to_coe", "approved"].includes(paper.status) ||
       Boolean(paper.last_coe_action),
   );
+  const departments = useMemo(
+    () => [...new Set(coePapers.map((paper) => paper.department).filter(Boolean))].sort(),
+    [coePapers],
+  );
+  const examinations = useMemo(
+    () => [...new Set(coePapers.map((paper) => paper.exam_label).filter(Boolean))].sort(),
+    [coePapers],
+  );
   const scoped = coePapers.filter(
     (paper) =>
       matchesQuery(paper, query) &&
-      (year === "all" || academicYear(paper.year) === year),
+      (year === "all" || academicYear(paper.year) === year) &&
+      (department === "all" || paper.department === department) &&
+      (examination === "all" || paper.exam_label === examination),
   );
   const pending = scoped.filter((paper) => paper.status === "submitted_to_coe");
-  const approved = scoped.filter((paper) => paper.status === "approved");
-  const yearSubjectRows = useMemo(() => {
+  const decided = scoped.filter(
+    (paper) => paper.status === "approved" || paper.last_coe_action === "decline",
+  );
+  const readinessRows = useMemo(() => {
     const grouped = new Map<string, DemoPaperSummary[]>();
     scoped.forEach((paper) => {
-      const key = `${academicYear(paper.year)}|${paper.course_name || paper.subject || "Unspecified subject"}`;
+      const key = [
+        paper.department || "Department not specified",
+        academicYear(paper.year),
+        paper.exam_label || "Examination not specified",
+      ].join("|");
       grouped.set(key, [...(grouped.get(key) ?? []), paper]);
     });
     return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right));
@@ -271,22 +297,26 @@ function CoeDashboard({
 
   return (
     <DashboardFrame
-      description="Perform final examination review across all academic years and subjects. This account cannot generate or edit papers."
+      description="College-wide examination control for HOD-selected papers. Review final submissions, record decisions, and monitor readiness across departments and years."
       error={error}
       onRefresh={onRefresh}
       query={query}
       queryPlaceholder="Subject, course code, department, or year"
       setQuery={setQuery}
-      title="CoE final review dashboard"
+      title="Controller of Examinations"
       toolbarExtra={
-        <label className="dashboard-filter"><span>Academic year</span><select onChange={(event) => setYear(event.target.value)} value={year}><option value="all">All years</option><option value="1">1st year</option><option value="2">2nd year</option><option value="3">3rd year</option><option value="4">4th year</option><option value="unspecified">Year not specified</option></select></label>
+        <>
+          <label className="dashboard-filter"><span>Department</span><select onChange={(event) => setDepartment(event.target.value)} value={department}><option value="all">All departments</option>{departments.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="dashboard-filter"><span>Academic year</span><select onChange={(event) => setYear(event.target.value)} value={year}><option value="all">All years</option><option value="1">1st year</option><option value="2">2nd year</option><option value="3">3rd year</option><option value="4">4th year</option><option value="unspecified">Year not specified</option></select></label>
+          <label className="dashboard-filter"><span>Examination</span><select onChange={(event) => setExamination(event.target.value)} value={examination}><option value="all">All examinations</option>{examinations.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        </>
       }
     >
       <Summary items={[
-        { label: "Awaiting final decision", value: coePapers.filter((paper) => paper.status === "submitted_to_coe").length, note: "Accept or decline" },
-        { label: "Accepted papers", value: coePapers.filter((paper) => paper.status === "approved").length, note: "Finalised by CoE" },
-        { label: "Declined papers", value: coePapers.filter((paper) => paper.last_coe_action === "decline").length, note: "Returned for revision" },
-        { label: "Subjects represented", value: new Set(coePapers.map((paper) => paper.course_code || paper.course_name)).size, note: "Across all years" },
+        { label: "Pending decisions", value: pending.length, note: "Requires CoE action" },
+        { label: "Approved", value: scoped.filter((paper) => paper.status === "approved").length, note: "Cleared for examination" },
+        { label: "Returned", value: scoped.filter((paper) => paper.last_coe_action === "decline").length, note: "Sent back for revision" },
+        { label: "Departments", value: new Set(scoped.map((paper) => paper.department).filter(Boolean)).size, note: "In the current view" },
       ]} />
 
       <PaperSection
@@ -298,23 +328,24 @@ function CoeDashboard({
         papers={pending}
         showDepartment
         showYear
-        title="Final decisions required"
+        title="Decisions required"
       />
       <section className="dashboard-section">
         <div className="dashboard-section-heading">
-          <div><h2>Year and subject overview</h2><p>Final-review workload separated by academic year and course.</p></div>
+          <div><h2>Examination readiness</h2><p>Submission position separated by department, academic year, and examination.</p></div>
         </div>
         <div className="table-scroll role-summary-table">
           <table>
-            <thead><tr><th>Year</th><th>Subject</th><th>Pending</th><th>Accepted</th><th>Declined</th></tr></thead>
+            <thead><tr><th>Department</th><th>Year</th><th>Examination</th><th>Subjects</th><th>Pending</th><th>Approved</th><th>Returned</th></tr></thead>
             <tbody>
-              {yearSubjectRows.map(([key, entries]) => {
-                const [yearKey, subjectName] = key.split("|");
-                const yearLabel = yearKey === "unspecified" ? "Not specified" : `${yearKey}${yearKey === "1" ? "st" : yearKey === "2" ? "nd" : yearKey === "3" ? "rd" : "th"} year`;
+              {readinessRows.map(([key, entries]) => {
+                const [departmentName, yearKey, examinationName] = key.split("|");
                 return (
                   <tr key={key}>
-                    <td>{yearLabel}</td>
-                    <td><strong>{subjectName}</strong><span className="demo-table-secondary">{entries[0]?.course_code || "Code not set"}</span></td>
+                    <td><strong>{departmentName}</strong></td>
+                    <td>{academicYearLabel(yearKey)}</td>
+                    <td>{examinationName}</td>
+                    <td>{new Set(entries.map((paper) => paper.course_code || paper.course_name)).size}</td>
                     <td>{entries.filter((paper) => paper.status === "submitted_to_coe").length}</td>
                     <td>{entries.filter((paper) => paper.status === "approved").length}</td>
                     <td>{entries.filter((paper) => paper.last_coe_action === "decline").length}</td>
@@ -326,14 +357,15 @@ function CoeDashboard({
         </div>
       </section>
       <PaperSection
-        description="Recently accepted examination papers for the selected year and subject filter."
-        emptyMessage="No accepted papers match this filter."
+        description="Completed CoE decisions, including papers cleared for use and papers returned for revision."
+        emptyMessage="No completed decisions match the current filters."
         loading={loading}
         onOpen={onOpen}
-        papers={approved.slice(0, 8)}
+        papers={decided.slice(0, 10)}
         showDepartment
+        showDecision
         showYear
-        title="Accepted paper history"
+        title="Recent decisions"
       />
     </DashboardFrame>
   );
@@ -377,18 +409,19 @@ interface PaperSectionProps {
   showOwner?: boolean;
   showDepartment?: boolean;
   showYear?: boolean;
+  showDecision?: boolean;
 }
 
-function PaperSection({ title, description, papers, loading, emptyMessage, onOpen, action, showOwner, showDepartment, showYear }: PaperSectionProps) {
+function PaperSection({ title, description, papers, loading, emptyMessage, onOpen, action, showOwner, showDepartment, showYear, showDecision }: PaperSectionProps) {
   return (
     <section className="dashboard-section">
       <div className="dashboard-section-heading"><div><h2>{title}</h2><p>{description}</p></div>{action}</div>
-      <PaperRows emptyMessage={emptyMessage} loading={loading} onOpen={onOpen} papers={papers} showDepartment={showDepartment} showOwner={showOwner} showYear={showYear} />
+      <PaperRows emptyMessage={emptyMessage} loading={loading} onOpen={onOpen} papers={papers} showDecision={showDecision} showDepartment={showDepartment} showOwner={showOwner} showYear={showYear} />
     </section>
   );
 }
 
-function PaperRows({ papers, loading, emptyMessage, onOpen, showOwner, showDepartment, showYear }: Omit<PaperSectionProps, "title" | "description" | "action">) {
+function PaperRows({ papers, loading, emptyMessage, onOpen, showOwner, showDepartment, showYear, showDecision }: Omit<PaperSectionProps, "title" | "description" | "action">) {
   if (loading) return <p className="dashboard-empty">Loading local papers…</p>;
   if (papers.length === 0) return <p className="dashboard-empty">{emptyMessage}</p>;
   return (
@@ -396,7 +429,7 @@ function PaperRows({ papers, loading, emptyMessage, onOpen, showOwner, showDepar
       {papers.map((paper) => (
         <button key={paper.id} onClick={() => onOpen(paper.id)} type="button">
           <span className="dashboard-paper-course"><strong>{paper.course_name || paper.subject}</strong><small>{paper.course_code || "Course code not set"} · {paper.exam_label}{showOwner ? ` · ${paper.generated_by || "Faculty not recorded"}` : ""}{showDepartment ? ` · ${paper.department || "Department not recorded"}` : ""}{showYear ? ` · ${paper.year || "Year not specified"}` : ""}</small></span>
-          <span className={`dashboard-status dashboard-status-${paper.status}`}>{STATUS_LABELS[paper.status]}</span>
+          <span className={`dashboard-status dashboard-status-${paper.status}`}>{showDecision && paper.last_coe_action === "decline" && paper.status !== "approved" ? "Returned for revision" : STATUS_LABELS[paper.status]}</span>
           <time dateTime={paper.updated_at}>{formatDate(paper.updated_at)}</time>
           <span className="dashboard-open">Open <span aria-hidden="true">→</span></span>
         </button>

@@ -44,6 +44,8 @@ interface PaperListPageProps {
 export function PaperListPage({ mode, user, papers, loading, error, onOpen, onRefresh }: PaperListPageProps) {
   const [subject, setSubject] = useState("all");
   const [year, setYear] = useState("all");
+  const [department, setDepartment] = useState("all");
+  const [examination, setExamination] = useState("all");
   const [status, setStatus] = useState("all");
   const copy = PAGE_COPY[user.role][mode];
   const accessiblePapers = user.role === "faculty"
@@ -55,12 +57,20 @@ export function PaperListPage({ mode, user, papers, loading, error, onOpen, onRe
     () => [...new Set(accessiblePapers.map((paper) => paper.course_name || paper.subject).filter(Boolean))].sort(),
     [accessiblePapers],
   );
+  const departments = useMemo(
+    () => [...new Set(accessiblePapers.map((paper) => paper.department).filter(Boolean))].sort(),
+    [accessiblePapers],
+  );
+  const examinations = useMemo(
+    () => [...new Set(accessiblePapers.map((paper) => paper.exam_label).filter(Boolean))].sort(),
+    [accessiblePapers],
+  );
 
   let rolePapers = accessiblePapers;
   if (user.role === "faculty" && mode === "history") {
     rolePapers = accessiblePapers.filter((paper) => paper.status !== "draft");
   } else if (user.role === "coe" && mode === "history") {
-    rolePapers = papers.filter((paper) => paper.status === "approved" || paper.last_coe_action === "decline");
+    rolePapers = accessiblePapers.filter((paper) => paper.status === "approved" || paper.last_coe_action === "decline");
   }
   if (mode === "queue") {
     rolePapers = rolePapers.filter((paper) => ROLE_QUEUE[user.role].includes(paper.status));
@@ -69,10 +79,18 @@ export function PaperListPage({ mode, user, papers, loading, error, onOpen, onRe
     (paper) =>
       (subject === "all" || (paper.course_name || paper.subject) === subject) &&
       (year === "all" || paper.year === year) &&
-      (user.role !== "faculty" || mode !== "history" || status === "all" ||
-        (status === "review"
-          ? ["submitted_to_hod", "submitted_to_coe"].includes(paper.status)
-          : paper.status === status)),
+      (department === "all" || paper.department === department) &&
+      (examination === "all" || paper.exam_label === examination) &&
+      (status === "all" ||
+        (user.role === "faculty" && mode === "history"
+          ? status === "review"
+            ? ["submitted_to_hod", "submitted_to_coe"].includes(paper.status)
+            : paper.status === status
+          : user.role === "coe" && mode === "history"
+            ? status === "declined"
+              ? paper.last_coe_action === "decline" && paper.status !== "approved"
+              : paper.status === status
+            : true)),
   );
   const years = [...new Set(accessiblePapers.map((paper) => paper.year).filter(Boolean))].sort();
 
@@ -86,7 +104,10 @@ export function PaperListPage({ mode, user, papers, loading, error, onOpen, onRe
       <div className="paper-list-filters">
         <label><span>Subject</span><select onChange={(event) => setSubject(event.target.value)} value={subject}><option value="all">All subjects</option>{subjects.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         {user.role === "faculty" && mode === "history" && <label><span>Status</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All generated papers</option><option value="faculty_finalized">Ready to send</option><option value="review">Under review</option><option value="approved">Approved</option></select></label>}
+        {user.role === "coe" && <label><span>Department</span><select onChange={(event) => setDepartment(event.target.value)} value={department}><option value="all">All departments</option>{departments.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}
         {user.role === "coe" && <label><span>Academic year</span><select onChange={(event) => setYear(event.target.value)} value={year}><option value="all">All years</option>{years.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}
+        {user.role === "coe" && <label><span>Examination</span><select onChange={(event) => setExamination(event.target.value)} value={examination}><option value="all">All examinations</option>{examinations.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}
+        {user.role === "coe" && mode === "history" && <label><span>Decision</span><select onChange={(event) => setStatus(event.target.value)} value={status}><option value="all">All decisions</option><option value="approved">Approved</option><option value="declined">Returned for revision</option></select></label>}
       </div>
 
       {error && <div className="request-error">{error}</div>}
@@ -108,7 +129,7 @@ export function PaperListPage({ mode, user, papers, loading, error, onOpen, onRe
                   <td>{paper.exam_label}</td>
                   <td>{user.role === "coe" && paper.last_coe_action === "decline" && paper.status !== "submitted_to_coe" && paper.status !== "approved" ? "Declined for revision" : STATUS_LABELS[paper.status]}</td>
                   <td>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(paper.updated_at))}</td>
-                  <td><button className="table-action" onClick={() => onOpen(paper.id)} type="button">{user.role === "faculty" ? (mode === "queue" ? "Edit draft" : "View paper") : "Review"}</button></td>
+                  <td><button className="table-action" onClick={() => onOpen(paper.id)} type="button">{user.role === "faculty" ? (mode === "queue" ? "Edit draft" : "View paper") : user.role === "coe" && mode === "history" ? "View decision" : "Review"}</button></td>
                 </tr>
               ))}
             </tbody>
