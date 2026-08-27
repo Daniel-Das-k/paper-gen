@@ -1163,6 +1163,61 @@ body:has(.demo-shell) {
   width: 260px;
 }
 
+.demo-workflow-bar-review {
+  align-items: center;
+  min-height: 78px;
+  padding: 16px 20px;
+}
+
+.demo-workflow-bar-review > div:first-child {
+  flex: 0 0 220px;
+}
+
+.demo-workflow-bar-review .demo-workflow-actions {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto auto;
+  width: min(820px, calc(100% - 240px));
+}
+
+.demo-workflow-bar-review .demo-workflow-actions input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+}
+
+.demo-workflow-bar-review .demo-workflow-actions button {
+  white-space: nowrap;
+}
+
+.result-heading-review {
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 20px 0;
+}
+
+.result-heading-review > div:first-child {
+  min-width: 0;
+}
+
+.result-heading-review .result-actions {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1120px) {
+  .demo-workflow-bar-review {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .demo-workflow-bar-review > div:first-child {
+    flex-basis: auto;
+  }
+
+  .demo-workflow-bar-review .demo-workflow-actions {
+    width: 100%;
+  }
+}
+
 .demo-question-editing,
 .demo-activity {
   margin: 24px 0;
@@ -1723,6 +1778,10 @@ body:has(.demo-shell) {
 
   .demo-workflow-actions input {
     width: 100%;
+  }
+
+  .demo-workflow-bar-review .demo-workflow-actions {
+    grid-template-columns: 1fr;
   }
 
   .dashboard-paper-list > button {

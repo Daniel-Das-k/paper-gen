@@ -420,9 +420,13 @@ export function WorkflowResultPanel({
 
   return (
     <section aria-labelledby="review-title" className="workspace-panel result-panel">
-      <div className="demo-workflow-bar">
+      <div
+        className={`demo-workflow-bar${
+          canHodReview || canCoeReview ? " demo-workflow-bar-review" : ""
+        }`}
+      >
         <div>
-          <span>Demo approval status</span>
+          <span>Approval status</span>
           <strong>{STATUS_LABELS[record.status]}</strong>
         </div>
         {(canFinalize || canHodReview || canCoeReview) && (
@@ -432,7 +436,11 @@ export function WorkflowResultPanel({
                 aria-label="Review comment"
                 disabled={busy}
                 onChange={(event) => setWorkflowComment(event.target.value)}
-                placeholder="Add a review comment"
+                placeholder={
+                  canCoeReview
+                    ? "Comment required when declining"
+                    : "Add a review comment"
+                }
                 value={workflowComment}
               />
             )}
@@ -483,7 +491,11 @@ export function WorkflowResultPanel({
           {actionError}
         </div>
       )}
-      <div className="panel-heading result-heading">
+      <div
+        className={`panel-heading result-heading${
+          canHodReview || canCoeReview ? " result-heading-review" : ""
+        }`}
+      >
         <div>
           <h2 id="review-title">
             {role === "faculty"
@@ -493,12 +505,17 @@ export function WorkflowResultPanel({
                 : "Final examination decision"}
           </h2>
           <p>
-            {accepted} of {questions.length} questions passed automated review.
-            {role === "faculty"
-              ? " Review any findings, then select Done to accept the draft and create the locked question paper."
-              : role === "hod"
-                ? " Compare the candidate sets, select one, and forward it to the CoE."
-                : " Review the HOD-selected set before accepting or declining it."}
+            {role === "faculty" ? (
+              <>
+                {accepted} of {questions.length} questions passed automated
+                review. Review any findings, then select Done to accept the
+                draft and create the locked question paper.
+              </>
+            ) : role === "hod" ? (
+              "Compare the candidate sets, select one, and forward it to the CoE."
+            ) : (
+              "Review the HOD-selected paper before accepting it or returning it for revision."
+            )}
           </p>
         </div>
         {!canEdit && <div className="result-actions">
