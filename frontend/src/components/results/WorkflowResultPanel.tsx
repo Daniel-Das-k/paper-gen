@@ -629,74 +629,76 @@ export function WorkflowResultPanel({
         </section>
       )}
 
-      {bloom != null && bloom.total > 0 && (
-        <section aria-labelledby="bloom-title" className="bloom-coverage">
-          <div className="bloom-coverage-heading">
-            <h3 id="bloom-title">Cognitive level coverage</h3>
-            <p>
-              {bloom.deviations === 0
-                ? "Every question was written at the level the blueprint requested."
-                : `${bloom.deviations} of ${bloom.total} questions were written at a different level than requested, because the source could not support the demand.`}
-            </p>
-          </div>
-          <ol className="bloom-scale">
-            {BLOOM_ORDER.map((level) => {
-              const requested = bloom.requested[level] ?? 0;
-              const written = bloom.observed[level] ?? 0;
-              if (!requested && !written) return null;
-              const share = Math.round((written / bloom.total) * 100);
-              return (
-                <li className="bloom-step" key={level}>
-                  <span className="bloom-step-name">{level}</span>
-                  <span
-                    aria-hidden="true"
-                    className="bloom-step-bar"
-                    style={{ ["--share" as string]: `${share}%` }}
-                  />
-                  <span className="bloom-step-count">
-                    {written}
-                    {requested !== written && <em> from {requested}</em>}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-        </section>
-      )}
-
-      {result.paper.course_outcome_coverage != null &&
-        Object.keys(result.paper.course_outcome_coverage.marks_by_outcome).length >
-          0 && (
-          <section aria-labelledby="outcome-title" className="bloom-coverage">
+      <div className="coverage-grid">
+        {bloom != null && bloom.total > 0 && (
+          <section aria-labelledby="bloom-title" className="bloom-coverage">
             <div className="bloom-coverage-heading">
-              <h3 id="outcome-title">Course outcome coverage</h3>
+              <h3 id="bloom-title">Cognitive level coverage</h3>
               <p>
-                Marks carried by each approved outcome. Accreditation expects
-                every outcome to be assessed somewhere in the paper.
+                {bloom.deviations === 0
+                  ? "Every question was written at the level the blueprint requested."
+                  : `${bloom.deviations} of ${bloom.total} questions were written at a different level than requested, because the source could not support the demand.`}
               </p>
             </div>
-            <ol className="outcome-coverage">
-              {Object.entries(
-                result.paper.course_outcome_coverage.marks_by_outcome,
-              ).map(([outcome, marks], index) => (
-                <li key={outcome}>
-                  <span className="outcome-tag">CO{index + 1}</span>
-                  <span className="outcome-text">{outcome}</span>
-                  <span className="outcome-marks">{marks}</span>
-                </li>
-              ))}
-              {result.paper.course_outcome_coverage.unmapped_marks > 0 && (
-                <li className="outcome-unmapped">
-                  <span className="outcome-tag">—</span>
-                  <span className="outcome-text">Not mapped to an outcome</span>
-                  <span className="outcome-marks">
-                    {result.paper.course_outcome_coverage.unmapped_marks}
-                  </span>
-                </li>
-              )}
+            <ol className="bloom-scale">
+              {BLOOM_ORDER.map((level) => {
+                const requested = bloom.requested[level] ?? 0;
+                const written = bloom.observed[level] ?? 0;
+                if (!requested && !written) return null;
+                const share = Math.round((written / bloom.total) * 100);
+                return (
+                  <li className="bloom-step" key={level}>
+                    <span className="bloom-step-name">{level}</span>
+                    <span
+                      aria-hidden="true"
+                      className="bloom-step-bar"
+                      style={{ ["--share" as string]: `${share}%` }}
+                    />
+                    <span className="bloom-step-count">
+                      {written}
+                      {requested !== written && <em> from {requested}</em>}
+                    </span>
+                  </li>
+                );
+              })}
             </ol>
           </section>
         )}
+
+        {result.paper.course_outcome_coverage != null &&
+          Object.keys(result.paper.course_outcome_coverage.marks_by_outcome).length >
+            0 && (
+            <section aria-labelledby="outcome-title" className="bloom-coverage">
+              <div className="bloom-coverage-heading">
+                <h3 id="outcome-title">Course outcome coverage</h3>
+                <p>
+                  Marks carried by each approved outcome. Accreditation expects
+                  every outcome to be assessed somewhere in the paper.
+                </p>
+              </div>
+              <ol className="outcome-coverage">
+                {Object.entries(
+                  result.paper.course_outcome_coverage.marks_by_outcome,
+                ).map(([outcome, marks], index) => (
+                  <li key={outcome}>
+                    <span className="outcome-tag">CO{index + 1}</span>
+                    <span className="outcome-text">{outcome}</span>
+                    <span className="outcome-marks">{marks}</span>
+                  </li>
+                ))}
+                {result.paper.course_outcome_coverage.unmapped_marks > 0 && (
+                  <li className="outcome-unmapped">
+                    <span className="outcome-tag">—</span>
+                    <span className="outcome-text">Not mapped to an outcome</span>
+                    <span className="outcome-marks">
+                      {result.paper.course_outcome_coverage.unmapped_marks}
+                    </span>
+                  </li>
+                )}
+              </ol>
+            </section>
+          )}
+      </div>
 
       <div className="table-heading table-heading-row">
         <div>

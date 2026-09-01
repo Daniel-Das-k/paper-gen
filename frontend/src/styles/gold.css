@@ -3572,6 +3572,22 @@ textarea:focus,
   white-space: nowrap;
 }
 
+.demo-shell .result-panel .coverage-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 0 0 16px;
+  align-items: stretch;
+}
+
+.demo-shell .result-panel .coverage-grid:empty {
+  display: none;
+}
+
+.demo-shell .result-panel .coverage-grid > .bloom-coverage:only-child {
+  grid-column: 1 / -1;
+}
+
 .demo-shell .result-panel .bloom-coverage,
 .demo-shell .result-panel .demo-question-editing,
 .demo-shell .result-panel .demo-activity,
@@ -3584,6 +3600,14 @@ textarea:focus,
   border-radius: var(--radius-2xl);
   background: var(--card);
   box-shadow: var(--shadow-pop);
+}
+
+.demo-shell .result-panel .coverage-grid > .bloom-coverage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  margin-bottom: 0;
 }
 
 .demo-shell .result-panel .bloom-coverage-heading,
@@ -3620,8 +3644,13 @@ textarea:focus,
 
 .demo-shell .result-panel .bloom-scale,
 .demo-shell .result-panel .outcome-coverage {
+  flex: 1;
   margin: 0;
   padding: 16px 24px 20px;
+}
+
+.demo-shell .result-panel .coverage-grid .bloom-coverage-heading p {
+  max-width: none;
 }
 
 .demo-shell .result-panel .bloom-step-bar {
@@ -3811,6 +3840,12 @@ textarea:focus,
 @media (max-width: 1040px) {
   .demo-shell .result-panel .result-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .demo-shell .result-panel .coverage-grid {
+    grid-template-columns: 1fr;
   }
 }
 
