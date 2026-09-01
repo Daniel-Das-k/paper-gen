@@ -132,12 +132,12 @@ export function UnitUploads({ uploads, loading, onChange }: UnitUploadsProps) {
               type="button"
             >
               <span aria-hidden="true" className="unit-drop-plus">
-                <svg fill="none" height="12" viewBox="0 0 12 12" width="12">
+                <svg fill="none" height="16" viewBox="0 0 16 16" width="16">
                   <path
-                    d="M6 1.5v9M1.5 6h9"
+                    d="M8 3v10M3 8h10"
                     stroke="currentColor"
                     strokeLinecap="round"
-                    strokeWidth="1.6"
+                    strokeWidth="1.5"
                   />
                 </svg>
               </span>
