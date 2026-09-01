@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from "react";
 
+import { QpMark } from "../components/icons/Icons";
+import { ThemeToggle } from "../components/layout/ThemeToggle";
 import type { DemoRole, DemoUser } from "../types/api";
 
 interface DemoAccount extends DemoUser {
@@ -28,6 +30,11 @@ export function DemoLoginPage({ onBack, onLogin }: DemoLoginPageProps) {
   const [password, setPassword] = useState(DEMO_ACCOUNTS[0].password);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedRole =
+    DEMO_ACCOUNTS.find(
+      (account) => account.username.toLowerCase() === username.trim().toLowerCase(),
+    )?.role ?? null;
+
   const chooseAccount = (account: DemoAccount) => {
     setUsername(account.username);
     setPassword(account.password);
@@ -42,7 +49,7 @@ export function DemoLoginPage({ onBack, onLogin }: DemoLoginPageProps) {
         candidate.password === password,
     );
     if (!account) {
-      setError("The demo username or password is incorrect.");
+      setError("The username or password is incorrect.");
       return;
     }
     const { password: _password, ...user } = account;
@@ -51,42 +58,87 @@ export function DemoLoginPage({ onBack, onLogin }: DemoLoginPageProps) {
 
   return (
     <main className="demo-login-page">
+      <header className="demo-login-chrome">
+        <button className="text-button" onClick={onBack} type="button">
+          {"\u2190"} Product site
+        </button>
+        <ThemeToggle />
+      </header>
+
       <section className="demo-login-panel" aria-labelledby="demo-login-title">
-        <div className="demo-login-heading">
-          <button className="text-button" onClick={onBack} type="button">← Product site</button>
-          <h1 id="demo-login-title">Sign in to REC QP Studio</h1>
-          <p>Choose a local demo account to test its permitted workflow.</p>
+        <div className="demo-login-brand">
+          <span aria-hidden="true" className="demo-login-mark">
+            <QpMark />
+          </span>
+          <strong>QP Studio</strong>
+          <span>Rajalakshmi Engineering College</span>
         </div>
 
-        <div className="demo-account-list" aria-label="Demo accounts">
+        <div className="demo-login-heading">
+          <h1 id="demo-login-title">Sign in</h1>
+          <p>Use a demo account to open the workspace for that role.</p>
+        </div>
+
+        <div
+          aria-label="Demo role"
+          className="demo-login-roles"
+          role="radiogroup"
+        >
           {DEMO_ACCOUNTS.map((account) => (
             <button
-              className={username === account.username ? "demo-account-active" : ""}
+              aria-checked={selectedRole === account.role}
+              className={
+                selectedRole === account.role ? "demo-login-role-active" : ""
+              }
               key={account.role}
               onClick={() => chooseAccount(account)}
+              role="radio"
               type="button"
             >
-              <strong>{ROLE_LABELS[account.role]}</strong>
-              <span>{account.username}</span>
-              <span>{account.password}</span>
+              {ROLE_LABELS[account.role]}
             </button>
           ))}
         </div>
 
         <form className="demo-login-form" onSubmit={submit}>
           <label>
-            <span>Username</span>
-            <input autoComplete="username" onChange={(event) => setUsername(event.target.value)} value={username} />
+            <span>Email</span>
+            <input
+              autoComplete="username"
+              onChange={(event) => {
+                setUsername(event.target.value);
+                setError(null);
+              }}
+              type="email"
+              value={username}
+            />
           </label>
           <label>
             <span>Password</span>
-            <input autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+            <input
+              autoComplete="current-password"
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setError(null);
+              }}
+              type="password"
+              value={password}
+            />
           </label>
-          {error && <p className="demo-login-error" role="alert">{error}</p>}
-          <button className="primary-button" type="submit">Sign in</button>
+          {error && (
+            <p className="demo-login-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button className="primary-button" type="submit">
+            Sign in
+          </button>
         </form>
 
-        <p className="demo-login-disclaimer">Local demonstration only. These accounts are not production authentication.</p>
+        <p className="demo-login-disclaimer">
+          Local demonstration only. These accounts are not production
+          authentication.
+        </p>
       </section>
     </main>
   );

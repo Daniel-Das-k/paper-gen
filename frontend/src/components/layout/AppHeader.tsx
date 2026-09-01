@@ -1,11 +1,12 @@
 import type { MouseEvent } from "react";
 
 import type { DemoUser } from "../../types/api";
+import { ThemeToggle } from "./ThemeToggle";
 import {
   DashboardIcon,
   ExitIcon,
-  FileIcon,
   HistoryIcon,
+  QpMark,
   ReviewIcon,
   UploadIcon,
 } from "../icons/Icons";
@@ -84,7 +85,7 @@ export function AppHeader({
         onClick={(event) => navigateInApp(event, onExitDemo)}
       >
         <span aria-hidden="true" className="demo-brand-mark">
-          <FileIcon />
+          <QpMark />
         </span>
         <span className="demo-brand-copy">
           <strong>REC QP Studio</strong>
@@ -93,40 +94,52 @@ export function AppHeader({
       </a>
 
       <nav aria-label="Primary navigation" className="demo-nav">
-        {navigation.map(([target, label, Icon]) => (
-            <a
-              aria-current={view === target ? "page" : undefined}
-              className={view === target ? "demo-nav-active" : ""}
-              href={DEMO_VIEW_PATHS[target]}
-              key={target}
-              onClick={(event) =>
-                navigateInApp(event, () => onViewChange(target))
-              }
-            >
-              <Icon />
-              <span>{label}</span>
-            </a>
-        ))}
+        <div className="demo-nav-section">
+          <span className="demo-nav-label">Workspace</span>
+          <div className="demo-nav-list">
+            {navigation.map(([target, label, Icon]) => (
+              <a
+                aria-current={view === target ? "page" : undefined}
+                className={
+                  view === target ? "demo-nav-item is-active" : "demo-nav-item"
+                }
+                href={DEMO_VIEW_PATHS[target]}
+                key={target}
+                onClick={(event) =>
+                  navigateInApp(event, () => onViewChange(target))
+                }
+              >
+                <Icon />
+                <span>{label}</span>
+              </a>
+            ))}
+          </div>
+        </div>
       </nav>
 
-      <div className="demo-sidebar-footer">
-        <div className="demo-role-select">
-          <span className="demo-role-avatar" aria-hidden="true">
-            {ROLE_LABELS[user.role].slice(0, 1)}
-          </span>
-          <span className="demo-role-copy">
-            <strong>{user.displayName}</strong>
-            <span>{ROLE_LABELS[user.role]} demo account</span>
-          </span>
+      <div className="demo-sidebar-end">
+        <div className="demo-sidebar-card">
+          <p>Local demonstration. Papers stay on this machine.</p>
+          <button onClick={onExitDemo} type="button">
+            Product site
+          </button>
         </div>
-        <button
-          className="demo-exit"
-          onClick={onLogout}
-          type="button"
-        >
-          <ExitIcon />
-          <span>Sign out</span>
-        </button>
+        <div className="demo-sidebar-footer">
+          <ThemeToggle variant="row" />
+          <div className="demo-role-select">
+            <span className="demo-role-avatar" aria-hidden="true">
+              {ROLE_LABELS[user.role].slice(0, 1)}
+            </span>
+            <span className="demo-role-copy">
+              <strong>{user.displayName}</strong>
+              <span>{ROLE_LABELS[user.role]} demo account</span>
+            </span>
+          </div>
+          <button className="demo-nav-item demo-exit" onClick={onLogout} type="button">
+            <ExitIcon />
+            <span>Sign out</span>
+          </button>
+        </div>
       </div>
     </aside>
   );

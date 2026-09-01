@@ -1,0 +1,116 @@
+{
+  "$schema": "https://tripwire.sh/schema/dither-kit.json",
+  "lockfileVersion": 1,
+  "registry": "https://tripwire.sh",
+  "mode": "source",
+  "components": {
+    "area-chart": {
+      "version": "0.1.0",
+      "hash": "sha256:8be8381f6c977b1e9c32e35b09d9a05d1576e10d78815fce62888ab012a0f8d5",
+      "files": [
+        {
+          "path": "components/dither-kit/area-chart.tsx",
+          "hash": "sha256:af10bef205532eefe354396e097d9786e3814e66cf315b499f8576fc2e582939"
+        },
+        {
+          "path": "components/dither-kit/area.tsx",
+          "hash": "sha256:4997e9f05b6a4341e1e158fad96af208eb8c11311e99f4cb41224fe5168d1a69"
+        },
+        {
+          "path": "components/dither-kit/cartesian-canvas.tsx",
+          "hash": "sha256:180a1525cbe10ec35bc79f689bd018cfdf115ebb4e1e6b1ff31d4bd37ecc6f09"
+        },
+        {
+          "path": "components/dither-kit/sparkline.tsx",
+          "hash": "sha256:b5dab0b68af7ebc976ec51a74776761ac26d79f4aacd9c453a6e79c49e8d11ff"
+        }
+      ]
+    },
+    "core": {
+      "version": "0.1.0",
+      "hash": "sha256:90425741f3326c2cea92c86ec0c4a7a90ea9f28748c39c3d2576e43ddf480749",
+      "files": [
+        {
+          "path": "components/dither-kit/block-legend.tsx",
+          "hash": "sha256:3c2089a3917881f2547e15ef37e0eb7c6ed6e8784e134b913c146105900e0e05"
+        },
+        {
+          "path": "components/dither-kit/cartesian-root.tsx",
+          "hash": "sha256:de89f3541805910013a148c046e1e5a567d88217c83842568ef2a6ee6ad5214f"
+        },
+        {
+          "path": "components/dither-kit/chart-context.tsx",
+          "hash": "sha256:fc10e54d528e84328c4f8834326f391239ad5b7b85195d90731202659410d77f"
+        },
+        {
+          "path": "components/dither-kit/common-context.tsx",
+          "hash": "sha256:aafb26404977148144a3d81da81a678d5956e14024f394ccdc7ae881dd07e52a"
+        },
+        {
+          "path": "components/dither-kit/dither-paint.ts",
+          "hash": "sha256:e1f21245229a3b3de2937ce8d3b873ed4b1f5170cbbcf8ab1bb701b3b45d1746"
+        },
+        {
+          "path": "components/dither-kit/dot.tsx",
+          "hash": "sha256:9909e3c73b5c104afb63690bec11b7eb21eaf2d41db60e3e53bec355459a3285"
+        },
+        {
+          "path": "components/dither-kit/grid.tsx",
+          "hash": "sha256:5037e3313e8399cc1e52a2f4aa08c4509459311e08d7c872595602fc993f7b30"
+        },
+        {
+          "path": "components/dither-kit/legend.tsx",
+          "hash": "sha256:2a067ebdc484c7bd9efb2afc4e8a0aa6718a14ec44ccd7bb94c871d192e501e6"
+        },
+        {
+          "path": "components/dither-kit/lib.ts",
+          "hash": "sha256:41493601eb53a70f7629f6e50bad233f7185eaad42ba2397ca56ac1afcf1bb5f"
+        },
+        {
+          "path": "components/dither-kit/palette.ts",
+          "hash": "sha256:83baac8f08a5d0661c4e0b795146c3a0de5096c8a88d93edbc1f6111c3ae52e0"
+        },
+        {
+          "path": "components/dither-kit/polar-context.tsx",
+          "hash": "sha256:514ac9a4984b036598a14ecd7acc29ee121e9259c8a85309d7ed3c1e22af6831"
+        },
+        {
+          "path": "components/dither-kit/polar-root.tsx",
+          "hash": "sha256:63cecb6193ce3cd296b93b018e2441ccdefcc055cdc31bf131c808f0cf0c0c52"
+        },
+        {
+          "path": "components/dither-kit/polar.ts",
+          "hash": "sha256:99de1d073790fd3c1567355848dae3c4c2a5cf30af805dc610eb717ad0ffc874"
+        },
+        {
+          "path": "components/dither-kit/reference-line.tsx",
+          "hash": "sha256:b0df8cf1144ab56fcce577bac4a39e06d9215a1fdf81bb112a4190a0445b138b"
+        },
+        {
+          "path": "components/dither-kit/scales.ts",
+          "hash": "sha256:bcb34da791195bee6c1ac2529ad64a66939084bf92e12db4d0c115a101ff552c"
+        },
+        {
+          "path": "components/dither-kit/series-context.tsx",
+          "hash": "sha256:fedf7966d7d0fb01afd80d32b678d244108aca03450d568890dbc43dc79e372c"
+        },
+        {
+          "path": "components/dither-kit/tooltip.tsx",
+          "hash": "sha256:d053ac2135c6f29d011cb0a83be29a797f8954ccbb02916402d2d3c2a52b17f2"
+        },
+        {
+          "path": "components/dither-kit/use-chart-dimensions.ts",
+          "hash": "sha256:74b7f2a08cce5b891348eed845fc8c218ed16fce362ef4f35587ec4cc864c834"
+        },
+        {
+          "path": "components/dither-kit/x-axis.tsx",
+          "hash": "sha256:9d63573e79c86ec4178c356a726aa2ebefa86d597dd0d90bd63358a4044cbb39"
+        },
+        {
+          "path": "components/dither-kit/y-axis.tsx",
+          "hash": "sha256:96d8cad3d7ca87a2a6f092399a60ba2f32612413a190f2885da67854229cdeff"
+        }
+      ]
+    }
+  }
+}

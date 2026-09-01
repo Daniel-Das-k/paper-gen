@@ -269,7 +269,7 @@ export function DashboardPage({
   };
 
   return (
-    <div className="app-shell demo-shell">
+    <div className="app-shell demo-shell arc-atmosphere">
       <AppHeader
         onExitDemo={onExitDemo}
         onLogout={onLogout}

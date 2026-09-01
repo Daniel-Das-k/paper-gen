@@ -1,4 +1,12 @@
-import { useMemo, useState, type ReactNode } from "react";
+import {
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+
+import { Area, AreaChart, Grid, Tooltip, XAxis, YAxis } from "@/components/dither-kit/area-chart";
+import type { ChartConfig } from "@/components/dither-kit/chart-context";
+import { Sparkline } from "@/components/dither-kit/sparkline";
 
 import type {
   DemoJob,
@@ -67,20 +75,156 @@ function matchesQuery(paper: DemoPaperSummary, query: string): boolean {
     .includes(normalized);
 }
 
-function Summary({
-  items,
-}: {
-  items: Array<{ label: string; value: number; note: string }>;
-}) {
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SPARK_DAYS = 14;
+const ACTIVITY_DAYS = 28;
+
+function dailyCounts(papers: DemoPaperSummary[]): number[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const origin = today.getTime();
+  const counts = Array.from({ length: SPARK_DAYS }, () => 0);
+  papers.forEach((paper) => {
+    const updated = new Date(paper.updated_at);
+    if (Number.isNaN(updated.getTime())) return;
+    updated.setHours(0, 0, 0, 0);
+    const diff = Math.round((origin - updated.getTime()) / DAY_MS);
+    if (diff >= 0 && diff < SPARK_DAYS) counts[SPARK_DAYS - 1 - diff] += 1;
+  });
+  return counts;
+}
+
+const KPI_COLORS = ["purple", "orange", "green", "blue"] as const;
+
+interface KpiItem {
+  label: string;
+  value: number;
+  note: string;
+  delta?: string;
+  series: number[];
+}
+
+function KpiCard({ item, color }: { item: KpiItem; color: (typeof KPI_COLORS)[number] }) {
+  const [hovered, setHovered] = useState(false);
+  const fingerprint = item.series.join(",");
+  const series = useMemo(
+    () => fingerprint.split(",").map((value) => Number(value)),
+    [fingerprint],
+  );
+  return (
+    <article
+      className="kpi-card"
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
+      <span className="kpi-label">{item.label}</span>
+      <div className="kpi-line">
+        <strong>{item.value}</strong>
+        {item.delta ? <em className="kpi-delta">{item.delta}</em> : null}
+      </div>
+      <small>{item.note}</small>
+      <div aria-hidden="true" className="kpi-spark">
+        <Sparkline
+          bloom="low"
+          bloomOnHover
+          color={color}
+          data={series}
+          hovered={hovered}
+          variant="gradient"
+        />
+      </div>
+    </article>
+  );
+}
+
+function Summary({ items }: { items: KpiItem[] }) {
   return (
     <section className="dashboard-summary" aria-label="Paper summary">
-      {items.map((item) => (
-        <div key={item.label}>
-          <span>{item.label}</span>
-          <strong>{item.value}</strong>
-          <small>{item.note}</small>
-        </div>
+      {items.map((item, index) => (
+        <KpiCard
+          color={KPI_COLORS[index % KPI_COLORS.length]}
+          item={item}
+          key={item.label}
+        />
       ))}
+    </section>
+  );
+}
+
+function updatedWithinDays(paper: DemoPaperSummary, days: number): boolean {
+  const updated = Date.parse(paper.updated_at);
+  if (Number.isNaN(updated)) return false;
+  return Date.now() - updated <= days * 24 * 60 * 60 * 1000;
+}
+
+function weeklyDelta(papers: DemoPaperSummary[]): string | undefined {
+  const recent = papers.filter((paper) => updatedWithinDays(paper, 7)).length;
+  return recent > 0 ? `+${recent} this week` : undefined;
+}
+
+const ACTIVITY_CONFIG: ChartConfig = {
+  papers: { label: "Papers", color: "blue" },
+};
+
+function ActivityChart({ papers }: { papers: DemoPaperSummary[] }) {
+  const days = useMemo(() => {
+    const buckets: Array<{
+      day: string;
+      label: string;
+      papers: number;
+    }> = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayLabel = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    for (let offset = ACTIVITY_DAYS - 1; offset >= 0; offset -= 1) {
+      const day = new Date(today.getTime() - offset * DAY_MS);
+      buckets.push({
+        day: String(day.getDate()),
+        label: dayLabel.format(day),
+        papers: 0,
+      });
+    }
+    const byKey = new Map(
+      buckets.map((bucket, index) => {
+        const date = new Date(today.getTime() - (ACTIVITY_DAYS - 1 - index) * DAY_MS);
+        return [date.toISOString().slice(0, 10), bucket];
+      }),
+    );
+    papers.forEach((paper) => {
+      const updated = new Date(paper.updated_at);
+      if (Number.isNaN(updated.getTime())) return;
+      const bucket = byKey.get(updated.toISOString().slice(0, 10));
+      if (bucket) bucket.papers += 1;
+    });
+    return buckets;
+  }, [papers]);
+
+  const rangeLabel = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    year: "numeric",
+  }).format(new Date());
+
+  return (
+    <section className="dashboard-section activity-card" aria-label="Paper activity">
+      <div className="dashboard-section-heading">
+        <div>
+          <h2>Paper activity</h2>
+          <p>Papers created or updated per day over the last four weeks.</p>
+        </div>
+        <span className="activity-range">{rangeLabel}</span>
+      </div>
+      <div className="activity-plot">
+        <AreaChart bloom="aura" config={ACTIVITY_CONFIG} data={days}>
+          <Grid />
+          <XAxis dataKey="day" />
+          <YAxis tickFormatter={(value) => String(Math.round(value))} />
+          <Tooltip labelKey="label" />
+          <Area dataKey="papers" variant="gradient" />
+        </AreaChart>
+      </div>
     </section>
   );
 }
@@ -120,12 +264,16 @@ function FacultyDashboard({
       setQuery={setQuery}
       title="Faculty dashboard"
     >
-      <Summary items={[
-        { label: "Total papers", value: owned.length, note: "All papers created by you" },
-        { label: "Editable drafts", value: owned.filter((paper) => paper.status === "draft").length, note: "Still with faculty" },
-        { label: "Under review", value: owned.filter((paper) => ["submitted_to_hod", "submitted_to_coe"].includes(paper.status)).length, note: "With HOD or CoE" },
-        { label: "Approved", value: owned.filter((paper) => paper.status === "approved").length, note: "Completed papers" },
-      ]} />
+      <Summary
+        items={[
+          { label: "Total papers", value: owned.length, note: "All papers created by you", delta: weeklyDelta(owned), series: dailyCounts(owned) },
+          { label: "Editable drafts", value: owned.filter((paper) => paper.status === "draft").length, note: "Still with faculty", series: dailyCounts(owned.filter((paper) => paper.status === "draft")) },
+          { label: "Under review", value: owned.filter((paper) => ["submitted_to_hod", "submitted_to_coe"].includes(paper.status)).length, note: "With HOD or CoE", series: dailyCounts(owned.filter((paper) => ["submitted_to_hod", "submitted_to_coe"].includes(paper.status))) },
+          { label: "Approved", value: owned.filter((paper) => paper.status === "approved").length, note: "Completed papers", series: dailyCounts(owned.filter((paper) => paper.status === "approved")) },
+        ]}
+      />
+
+      <ActivityChart papers={owned} />
 
       {activeJob && (
         <section className="dashboard-generation" aria-live="polite">
@@ -193,12 +341,16 @@ function HodDashboard({
       setQuery={setQuery}
       title="HOD department dashboard"
     >
-      <Summary items={[
-        { label: "Department papers", value: departmentPapers.length, note: "Submitted by faculty" },
-        { label: "Awaiting your review", value: departmentPapers.filter((paper) => paper.status === "submitted_to_hod").length, note: "Action required" },
-        { label: "Forwarded by you", value: departmentPapers.filter((paper) => paper.hod_approved).length, note: "Sent to CoE" },
-        { label: "Approved by CoE", value: departmentPapers.filter((paper) => paper.status === "approved").length, note: "Final approval complete" },
-      ]} />
+      <Summary
+        items={[
+          { label: "Department papers", value: departmentPapers.length, note: "Submitted by faculty", delta: weeklyDelta(departmentPapers), series: dailyCounts(departmentPapers) },
+          { label: "Awaiting your review", value: departmentPapers.filter((paper) => paper.status === "submitted_to_hod").length, note: "Action required", series: dailyCounts(departmentPapers.filter((paper) => paper.status === "submitted_to_hod")) },
+          { label: "Forwarded by you", value: departmentPapers.filter((paper) => paper.hod_approved).length, note: "Sent to CoE", series: dailyCounts(departmentPapers.filter((paper) => paper.hod_approved)) },
+          { label: "Approved by CoE", value: departmentPapers.filter((paper) => paper.status === "approved").length, note: "Final approval complete", series: dailyCounts(departmentPapers.filter((paper) => paper.status === "approved")) },
+        ]}
+      />
+
+      <ActivityChart papers={departmentPapers} />
 
       <PaperSection
         action={<button className="text-button" onClick={onQueue} type="button">Open department queue</button>}
@@ -312,12 +464,16 @@ function CoeDashboard({
         </>
       }
     >
-      <Summary items={[
-        { label: "Pending decisions", value: pending.length, note: "Requires CoE action" },
-        { label: "Approved", value: scoped.filter((paper) => paper.status === "approved").length, note: "Cleared for examination" },
-        { label: "Returned", value: scoped.filter((paper) => paper.last_coe_action === "decline").length, note: "Sent back for revision" },
-        { label: "Departments", value: new Set(scoped.map((paper) => paper.department).filter(Boolean)).size, note: "In the current view" },
-      ]} />
+      <Summary
+        items={[
+          { label: "Pending decisions", value: pending.length, note: "Requires CoE action", delta: weeklyDelta(pending), series: dailyCounts(pending) },
+          { label: "Approved", value: scoped.filter((paper) => paper.status === "approved").length, note: "Cleared for examination", series: dailyCounts(scoped.filter((paper) => paper.status === "approved")) },
+          { label: "Returned", value: scoped.filter((paper) => paper.last_coe_action === "decline").length, note: "Sent back for revision", series: dailyCounts(scoped.filter((paper) => paper.last_coe_action === "decline")) },
+          { label: "Departments", value: new Set(scoped.map((paper) => paper.department).filter(Boolean)).size, note: "In the current view", series: dailyCounts(scoped) },
+        ]}
+      />
+
+      <ActivityChart papers={scoped} />
 
       <PaperSection
         action={<button className="text-button" onClick={onQueue} type="button">Open final review queue</button>}
@@ -428,6 +584,9 @@ function PaperRows({ papers, loading, emptyMessage, onOpen, showOwner, showDepar
     <div className="dashboard-paper-list">
       {papers.map((paper) => (
         <button key={paper.id} onClick={() => onOpen(paper.id)} type="button">
+          <span aria-hidden="true" className="dashboard-paper-avatar">
+            {(paper.course_code || paper.course_name || paper.subject || "QP").replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "QP"}
+          </span>
           <span className="dashboard-paper-course"><strong>{paper.course_name || paper.subject}</strong><small>{paper.course_code || "Course code not set"} · {paper.exam_label}{showOwner ? ` · ${paper.generated_by || "Faculty not recorded"}` : ""}{showDepartment ? ` · ${paper.department || "Department not recorded"}` : ""}{showYear ? ` · ${paper.year || "Year not specified"}` : ""}</small></span>
           <span className={`dashboard-status dashboard-status-${paper.status}`}>{showDecision && paper.last_coe_action === "decline" && paper.status !== "approved" ? "Returned for revision" : STATUS_LABELS[paper.status]}</span>
           <time dateTime={paper.updated_at}>{formatDate(paper.updated_at)}</time>

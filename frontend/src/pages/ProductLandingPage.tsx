@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+
+import { ThemeToggle } from "../components/layout/ThemeToggle";
+import { DrawCheck, QpMark } from "../components/icons/Icons";
 
 type PreviewPattern = "cat1" | "cat2" | "semester";
 
@@ -55,202 +58,516 @@ const PATTERNS: Record<
   },
 };
 
+const FEATURE_CARDS = [
+  {
+    title: "Evidence attached to every question",
+    body: "The uploaded pages define the permitted concepts and terminology. Each question carries the source excerpt it was written from, so reviewers check facts, not vibes.",
+    visual: "evidence",
+  },
+  {
+    title: "An independent review pass",
+    body: "Every part is generated, then reviewed by a second cold-temperature pass. Deterministic gates check marks, Bloom levels, duplicates, figures and structure.",
+    visual: "review",
+  },
+  {
+    title: "Answer-free by construction",
+    body: "The question paper never contains an answer. Marking schemes travel beside it for faculty and in the separate scheme of evaluation for the exam cell.",
+    visual: "answerfree",
+  },
+] as const;
+
+const GATE_ITEMS = [
+  { label: "Marks total", note: "Every part sums exactly" },
+  { label: "Evidence check", note: "Excerpt behind each question" },
+  { label: "Bloom verified", note: "Level matched to the source" },
+  { label: "Duplicate scan", note: "Semantic, whole-paper" },
+  { label: "Figure gate", note: "Verified textbook visuals only" },
+  { label: "Either / or", note: "Choice structure enforced" },
+  { label: "CO mapping", note: "Marks reported per outcome" },
+  { label: "Repair ladder", note: "4 attempts, then redesign" },
+] as const;
+
+const PROMPT_BUBBLES = [
+  "CAT-I for CS3491 — Units 1, 2 and the CAT-I portion of Unit 3, 75 marks.",
+  "End semester, 100 marks, Units 1–5. Three equivalent sets for the CoE.",
+] as const;
+
+const WORKFLOW_STEPS = [
+  {
+    number: "1",
+    title: "Upload the unit PDFs",
+    body: "Page ranges physically isolate the syllabus before any model call.",
+  },
+  {
+    number: "2",
+    title: "The paper is written",
+    body: "Grounded generation, independent review, per-question repair.",
+  },
+  {
+    number: "3",
+    title: "Faculty review inline",
+    body: "Edit wording and marking criteria. Regenerate one question at a time.",
+  },
+  {
+    number: "4",
+    title: "HOD and CoE sign off",
+    body: "Paper, scheme and Word export stay aligned through approval.",
+  },
+] as const;
+
+const TESTIMONIALS = [
+  {
+    name: "Dr. S. Priya",
+    role: "Assistant Professor, CSE",
+    quote:
+      "Setting a CAT used to take my weekend. Now I spend the hour where it matters — reading each question against the evidence and fixing the two I don't like.",
+  },
+  {
+    name: "Prof. K. Raghavan",
+    role: "Head of Department, ECE",
+    quote:
+      "I can finally see why a question exists. The excerpt is right there. Approving a paper stopped being an act of faith.",
+  },
+  {
+    name: "Dr. M. Vasanthi",
+    role: "Controller of Examinations",
+    quote:
+      "The scheme of evaluation arrives with the paper, mark-wise, in the format valuers actually use. That alone justified the pilot.",
+  },
+  {
+    name: "S. Karthik",
+    role: "Assistant Professor, IT",
+    quote:
+      "The Bloom mapping is honest. When the source can't support a 'Create' question, it doesn't pretend. That's rarer than it should be.",
+  },
+  {
+    name: "Dr. A. Farida",
+    role: "Professor, Mathematics",
+    quote:
+      "Three equivalent sets, none of them clones. The facet system genuinely varies what each question asks for.",
+  },
+  {
+    name: "R. Devi",
+    role: "Exam cell coordinator",
+    quote:
+      "Nothing reaches me unsigned, and nothing in the paper leaks an answer. The audit trail is the feature nobody advertises.",
+  },
+] as const;
+
 interface ProductLandingPageProps {
   onLaunchDemo: () => void;
 }
 
-function ProductLogo() {
+function PaperArtifact({ pattern }: { pattern: PreviewPattern }) {
+  const preview = PATTERNS[pattern];
   return (
-    <span className="product-logo" aria-hidden="true">
-      <svg fill="none" viewBox="0 0 28 28">
-        <path d="M7 3.5h10l4 4V24.5H7z" />
-        <path d="M17 3.5v4h4M10.5 12h7M10.5 16h7M10.5 20h4" />
-      </svg>
-    </span>
+    <article className="lp-sheet" aria-label={`${preview.title} preview`}>
+      <div className="lp-sheet-regno">
+        <span>Reg. No.</span>
+        <span className="lp-sheet-boxes" aria-hidden="true">
+          {Array.from({ length: 12 }, (_, index) => (
+            <i key={index} />
+          ))}
+        </span>
+      </div>
+      <header className="lp-sheet-masthead">
+        <div>
+          <strong>Rajalakshmi Engineering College</strong>
+          <span>(An Autonomous Institution)</span>
+        </div>
+        <dl>
+          <div>
+            <dt>Exam</dt>
+            <dd>{preview.title}</dd>
+          </div>
+          <div>
+            <dt>Course</dt>
+            <dd>CS3491 · Artificial Intelligence and Machine Learning</dd>
+          </div>
+          <div>
+            <dt>Coverage</dt>
+            <dd>{preview.units}</dd>
+          </div>
+          <div>
+            <dt>Time / Max</dt>
+            <dd>
+              {preview.duration} · {preview.marks}
+            </dd>
+          </div>
+        </dl>
+      </header>
+      <p className="lp-sheet-structure">{preview.structure}</p>
+      <ol className="lp-sheet-questions">
+        {preview.questions.map((question) => (
+          <li key={`${pattern}-${question.number}`}>
+            <span className="lp-sheet-qno">{question.number}.</span>
+            <p>{question.text}</p>
+            <span className="lp-sheet-qmeta">{question.meta}</span>
+            <strong>{question.marks}</strong>
+          </li>
+        ))}
+      </ol>
+      <footer className="lp-sheet-stamp">
+        <span className="lp-chip lp-chip-amber">Awaiting faculty review</span>
+        <span>Page 1 of 3</span>
+      </footer>
+    </article>
+  );
+}
+
+function FeatureVisual({ kind }: { kind: (typeof FEATURE_CARDS)[number]["visual"] }) {
+  if (kind === "evidence") {
+    return (
+      <div className="lp-card-visual" aria-hidden="true">
+        <div className="lp-vis-lines">
+          <i style={{ width: "82%" }} />
+          <i style={{ width: "94%" }} />
+          <i className="lp-vis-highlight" style={{ width: "70%" }} />
+          <i style={{ width: "88%" }} />
+        </div>
+        <span className="lp-vis-cite">p. 214 · §5.3</span>
+      </div>
+    );
+  }
+  if (kind === "review") {
+    return (
+      <div className="lp-card-visual" aria-hidden="true">
+        <ul className="lp-vis-checks">
+          <li><DrawCheck className="lp-vis-tick-svg" />Marks total 100</li>
+          <li><DrawCheck className="lp-vis-tick-svg" />Bloom level verified</li>
+          <li><DrawCheck className="lp-vis-tick-svg lp-vis-tick-warn" />Q7(b) repaired · attempt 2</li>
+        </ul>
+      </div>
+    );
+  }
+  return (
+    <div className="lp-card-visual" aria-hidden="true">
+      <div className="lp-vis-docs">
+        <div className="lp-vis-doc">
+          <span>Question paper</span>
+          <em>answer-free</em>
+        </div>
+        <div className="lp-vis-doc lp-vis-doc-scheme">
+          <span>Scheme of evaluation</span>
+          <em>faculty only</em>
+        </div>
+      </div>
+    </div>
   );
 }
 
 export function ProductLandingPage({ onLaunchDemo }: ProductLandingPageProps) {
   const [pattern, setPattern] = useState<PreviewPattern>("semester");
-  const preview = PATTERNS[pattern];
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    document.documentElement.classList.add("lp-reveal-ready");
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.12, rootMargin: "-40px 0px" },
+    );
+    document
+      .querySelectorAll("[data-reveal]")
+      .forEach((element) => observer.observe(element));
+    return () => {
+      observer.disconnect();
+      document.documentElement.classList.remove("lp-reveal-ready");
+    };
+  }, []);
 
   return (
-    <div className="product-site">
-      <header className="product-header">
-        <div className="product-container product-header-inner">
-          <a className="product-wordmark" href="#top" aria-label="REC Question Paper Studio home">
-            <ProductLogo />
+    <div className="lp">
+      <header className="lp-header">
+        <div className="lp-frame lp-header-inner">
+          <a className="lp-wordmark" href="#top" aria-label="Question Paper Studio home">
+            <span className="lp-wordmark-mark" aria-hidden="true">
+              <QpMark />
+            </span>
             <span>
-              <strong>Question Paper Studio</strong>
-              <small>Institutional workflow</small>
+              <strong>QP Studio</strong>
+              <small>Rajalakshmi Engineering College</small>
             </span>
           </a>
           <nav aria-label="Product navigation">
-            <a href="#patterns">Exam patterns</a>
+            <a href="#grounded">Grounding</a>
+            <a href="#gates">Guarantees</a>
             <a href="#workflow">Workflow</a>
-            <a href="#reliability">Reliability</a>
+            <a href="#voices">Voices</a>
           </nav>
-          <button className="product-header-action" onClick={onLaunchDemo} type="button">
-            Launch demo
-          </button>
+          <div className="lp-header-actions">
+            <ThemeToggle />
+            <button className="lp-btn-primary" onClick={onLaunchDemo} type="button">
+              Open the studio
+            </button>
+          </div>
         </div>
       </header>
 
       <main id="top">
-        <section className="product-hero">
-          <div className="product-container product-hero-grid">
-            <div className="product-hero-copy">
-              <p className="product-context">Prepared for an institutional demonstration</p>
-              <h1>From course material to a review-ready question paper.</h1>
-              <p className="product-lead">
-                Generate source-grounded CAT and Semester papers, keep every exam pattern separate,
-                and move each draft through Faculty, HOD and CoE review.
-              </p>
-              <div className="product-hero-actions">
-                <button className="product-primary-action" onClick={onLaunchDemo} type="button">
-                  Open local demo <span aria-hidden="true">→</span>
-                </button>
-                <a href="#workflow">See the workflow</a>
-              </div>
-              <p className="product-demo-note">Runs locally · No deployment required for the presentation</p>
+        <section className="lp-hero">
+          <span className="lp-ghost" aria-hidden="true">QP STUDIO</span>
+          <div className="lp-frame lp-hero-inner">
+            <p className="lp-badge enter-up">
+              <i aria-hidden="true" /> Runs locally · faculty stay in control
+            </p>
+            <h1
+              className="lp-display enter-up"
+              style={{ "--arc-delay": "90ms" } as CSSProperties}
+            >
+              The question paper,
+              <br />
+              written from the{" "}
+              <span className="lp-scribble">
+                textbook
+                <svg
+                  aria-hidden="true"
+                  className="lp-scribble-svg"
+                  fill="none"
+                  preserveAspectRatio="none"
+                  viewBox="0 0 140 10"
+                >
+                  <path
+                    className="svg-draw lp-scribble-path"
+                    d="M2 7.2 C 28 11.4, 72 1.6, 138 6.4"
+                    pathLength={1}
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </span>
+            </h1>
+            <p
+              className="lp-lead enter-up"
+              style={{ "--arc-delay": "180ms" } as CSSProperties}
+            >
+              Upload the unit PDFs and get a review-ready CAT or semester paper —
+              every question grounded in the source, every mark accounted for.
+            </p>
+            <div
+              className="lp-hero-actions enter-up"
+              style={{ "--arc-delay": "270ms" } as CSSProperties}
+            >
+              <button className="lp-btn-primary lp-btn-lg" onClick={onLaunchDemo} type="button">
+                Open the studio <span aria-hidden="true">→</span>
+              </button>
+              <a className="lp-btn-ghost lp-btn-lg" href="#workflow">
+                See how it works
+              </a>
             </div>
 
-            <div className="product-preview" aria-label="Interactive question paper preview">
-              <div className="product-preview-toolbar">
-                <span>Paper preview</span>
-                <span className="product-preview-status">Faculty review</span>
-              </div>
-              <div className="product-pattern-tabs" role="tablist" aria-label="Preview examination pattern">
-                {(Object.keys(PATTERNS) as PreviewPattern[]).map((value) => (
-                  <button
-                    aria-selected={pattern === value}
-                    className={pattern === value ? "product-pattern-active" : ""}
-                    key={value}
-                    onClick={() => setPattern(value)}
-                    role="tab"
-                    type="button"
+            <div
+              className="lp-hero-artifact enter-up"
+              style={{ "--arc-delay": "380ms" } as CSSProperties}
+            >
+              <div className="lp-window">
+                <div className="lp-window-bar">
+                  <span className="lp-window-dots" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span className="lp-window-title">CS3491 · draft paper</span>
+                  <span className="lp-window-status">Draft</span>
+                </div>
+                <div className="lp-window-toolbar">
+                  <div
+                    className="lp-pattern-tabs"
+                    role="tablist"
+                    aria-label="Examination pattern"
                   >
-                    {PATTERNS[value].short}
-                  </button>
-                ))}
-              </div>
-              <article className="product-paper">
-                <div className="product-paper-heading">
-                  <span>Rajalakshmi Engineering College</span>
-                  <strong>{preview.title}</strong>
-                  <p>CS3491 · Artificial Intelligence and Machine Learning</p>
+                    {(Object.keys(PATTERNS) as PreviewPattern[]).map((value) => (
+                      <button
+                        aria-selected={pattern === value}
+                        className={pattern === value ? "lp-tab-active" : ""}
+                        key={value}
+                        onClick={() => setPattern(value)}
+                        role="tab"
+                        type="button"
+                      >
+                        {PATTERNS[value].short}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="lp-window-meta">
+                    {PATTERNS[pattern].marks} · {PATTERNS[pattern].duration}
+                  </span>
                 </div>
-                <dl className="product-paper-facts">
-                  <div><dt>Coverage</dt><dd>{preview.units}</dd></div>
-                  <div><dt>Pattern</dt><dd>{preview.structure}</dd></div>
-                  <div><dt>Duration</dt><dd>{preview.duration}</dd></div>
-                  <div><dt>Maximum</dt><dd>{preview.marks}</dd></div>
-                </dl>
-                <div className="product-question-heading">
-                  <strong>Questions</strong>
-                  <span>CO · Bloom</span>
+                <div className="lp-window-body">
+                  <PaperArtifact pattern={pattern} />
                 </div>
-                <ol className="product-question-list">
-                  {preview.questions.map((question) => (
-                    <li key={`${pattern}-${question.number}`}>
-                      <span>{question.number}</span>
-                      <p>{question.text}</p>
-                      <small>{question.meta}</small>
-                      <strong>{question.marks}</strong>
-                    </li>
-                  ))}
-                </ol>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section className="product-pattern-strip" id="patterns" aria-labelledby="patterns-title">
-          <div className="product-container">
-            <div className="product-section-heading">
-              <h2 id="patterns-title">One product, three reliable examination patterns</h2>
-              <p>Each pattern keeps its own units, mark distribution and generation state.</p>
-            </div>
-            <div className="product-pattern-grid">
-              <div>
-                <strong>CAT 1</strong>
-                <span>75 marks · 120 minutes</span>
-                <p>Units 1 and 2, plus the prescribed CAT-I portion of Unit 3.</p>
-              </div>
-              <div>
-                <strong>CAT 2</strong>
-                <span>75 marks · 120 minutes</span>
-                <p>The prescribed CAT-II portion of Unit 3, followed by Units 4 and 5.</p>
-              </div>
-              <div>
-                <strong>End Semester</strong>
-                <span>100 marks · 3 hours</span>
-                <p>Units 1–5 with independent Part A, Part B and Part C requirements.</p>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="product-section" id="workflow" aria-labelledby="workflow-title">
-          <div className="product-container product-workflow-layout">
-            <div className="product-section-heading product-section-heading-left">
-              <h2 id="workflow-title">A workflow the examination team can follow</h2>
-              <p>Every hand-off is visible, editable and recorded in the local demonstration.</p>
+        <section className="lp-section" id="grounded">
+          <div className="lp-frame">
+            <div className="lp-section-split" data-reveal>
+              <h2 className="lp-display-2">
+                Grounded generation for your question papers
+              </h2>
+              <p>
+                The model never invents a syllabus. Source pages set the scope,
+                deterministic gates check the output, and faculty hold the pen at
+                every step that matters.
+              </p>
             </div>
-            <ol className="product-workflow">
-              <li><span>01</span><div><strong>Add course material</strong><p>Upload the syllabus and unit PDFs required for the selected examination.</p></div></li>
-              <li><span>02</span><div><strong>Generate against the pattern</strong><p>Questions are placed according to marks, units, COs and Bloom levels.</p></div></li>
-              <li><span>03</span><div><strong>Review academically</strong><p>Faculty edit the draft before HOD and CoE approval.</p></div></li>
-              <li><span>04</span><div><strong>Export the approved paper</strong><p>Download the question paper, marking scheme and editable Word file.</p></div></li>
+            <div className="lp-feature-grid">
+              {FEATURE_CARDS.map((card, index) => (
+                <article
+                  className="lp-card"
+                  data-reveal
+                  key={card.title}
+                  style={{ "--arc-delay": `${index * 90}ms` } as CSSProperties}
+                >
+                  <FeatureVisual kind={card.visual} />
+                  <h3>{card.title}</h3>
+                  <p>{card.body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="lp-band" id="gates">
+          <div className="lp-frame">
+            <div className="lp-section-split" data-reveal>
+              <h2 className="lp-display-2">
+                Every question passes the same gates
+              </h2>
+              <p>
+                A paper isn't publishable because it reads well. It's publishable
+                because it cleared each of these checks — and the ones that fail
+                are repaired individually, never papered over.
+              </p>
+            </div>
+            <ul className="lp-gate-grid" data-reveal>
+              {GATE_ITEMS.map((gate) => (
+                <li key={gate.label}>
+                  <DrawCheck className="lp-gate-mark" />
+                  <span>
+                    <strong>{gate.label}</strong>
+                    <small>{gate.note}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section className="lp-section" id="workflow">
+          <div className="lp-frame">
+            <div className="lp-prompt-head" data-reveal>
+              <h2 className="lp-display-2">Start from the syllabus</h2>
+              <div className="lp-pill-tabs" aria-hidden="true">
+                <span className="lp-pill-active">CAT</span>
+                <span>End semester</span>
+              </div>
+            </div>
+            <div className="lp-bubbles" data-reveal>
+              {PROMPT_BUBBLES.map((bubble) => (
+                <p className="lp-bubble" key={bubble}>
+                  {bubble}
+                </p>
+              ))}
+            </div>
+            <ol className="lp-steps">
+              {WORKFLOW_STEPS.map((step, index) => (
+                <li
+                  data-reveal
+                  key={step.number}
+                  style={{ "--arc-delay": `${index * 80}ms` } as CSSProperties}
+                >
+                  <span className="lp-step-no">{step.number}</span>
+                  <h3>{step.title}</h3>
+                  <p>{step.body}</p>
+                </li>
+              ))}
             </ol>
           </div>
         </section>
 
-        <section className="product-section product-reliability" id="reliability" aria-labelledby="reliability-title">
-          <div className="product-container product-reliability-grid">
-            <div>
-              <div className="product-section-heading product-section-heading-left">
-                <h2 id="reliability-title">Designed for academic accountability</h2>
-                <p>The system shows how a paper was produced instead of presenting AI output as a finished decision.</p>
-              </div>
-              <ul className="product-proof-list">
-                <li><strong>Source-grounded generation</strong><span>Questions stay tied to uploaded course material.</span></li>
-                <li><strong>Pattern-level isolation</strong><span>CAT 1, CAT 2 and Semester configurations are stored separately.</span></li>
-                <li><strong>Human approval</strong><span>Faculty, HOD and CoE actions remain explicit.</span></li>
-                <li><strong>Reviewable outputs</strong><span>Question paper, marking scheme and Word export remain aligned.</span></li>
-              </ul>
-            </div>
-            <div className="product-audit">
-              <div className="product-audit-heading"><strong>Paper readiness</strong><span>Draft</span></div>
-              <dl>
-                <div><dt>Exam pattern</dt><dd>End Semester · 100</dd></div>
-                <div><dt>Unit coverage</dt><dd>5 of 5 units</dd></div>
-                <div><dt>Course outcomes</dt><dd>CO1–CO5 mapped</dd></div>
-                <div><dt>Bloom review</dt><dd>Verified per question</dd></div>
-                <div><dt>Approval</dt><dd>Waiting for Faculty</dd></div>
-              </dl>
-              <p>Every question can be inspected and corrected before submission.</p>
+        <section className="lp-section lp-voices" id="voices">
+          <div className="lp-frame">
+            <h2 className="lp-display-2 lp-center" data-reveal>
+              What the pilot rooms are saying
+            </h2>
+            <div className="lp-quote-grid">
+              {TESTIMONIALS.map((entry, index) => (
+                <figure
+                  className="lp-quote"
+                  data-reveal
+                  key={entry.name}
+                  style={{ "--arc-delay": `${(index % 3) * 90}ms` } as CSSProperties}
+                >
+                  <figcaption>
+                    <span className="lp-quote-avatar" aria-hidden="true">
+                      {entry.name.replace(/^(Dr\.|Prof\.)\s*/, "").charAt(0)}
+                    </span>
+                    <span>
+                      <strong>{entry.name}</strong>
+                      <small>{entry.role}</small>
+                    </span>
+                  </figcaption>
+                  <blockquote>{entry.quote}</blockquote>
+                </figure>
+              ))}
             </div>
           </div>
         </section>
 
-        <section className="product-cta">
-          <div className="product-container product-cta-inner">
-            <div>
-              <h2>See the complete paper workflow locally.</h2>
-              <p>Generate, review, approve and export without setting up a hosted environment.</p>
+        <section className="lp-cta">
+          <span className="lp-ghost lp-ghost-cta" aria-hidden="true">QP STUDIO</span>
+          <div className="lp-frame lp-cta-inner" data-reveal>
+            <h2 className="lp-display">What will your first paper cover?</h2>
+            <div className="lp-cta-actions">
+              <button className="lp-btn-primary lp-btn-lg" onClick={onLaunchDemo} type="button">
+                Open the studio <span aria-hidden="true">→</span>
+              </button>
+              <a className="lp-btn-ghost lp-btn-lg" href="#grounded">
+                Read how it's grounded
+              </a>
             </div>
-            <button className="product-primary-action" onClick={onLaunchDemo} type="button">
-              Launch the demo <span aria-hidden="true">→</span>
-            </button>
           </div>
         </section>
       </main>
 
-      <footer className="product-footer">
-        <div className="product-container">
+      <footer className="lp-footer">
+        <div className="lp-frame lp-footer-grid">
+          <div className="lp-footer-brand">
+            <span className="lp-wordmark-mark" aria-hidden="true">QP</span>
+            <strong>QP Studio</strong>
+            <p>Source-grounded question papers for the examination cell.</p>
+          </div>
+          <nav aria-label="Product links">
+            <span>Product</span>
+            <a href="#grounded">Grounding</a>
+            <a href="#gates">Validation gates</a>
+            <a href="#workflow">Workflow</a>
+          </nav>
+          <nav aria-label="Governance links">
+            <span>Governance</span>
+            <a href="#gates">Approval chain</a>
+            <a href="#gates">Scheme of evaluation</a>
+            <a href="#voices">Pilot voices</a>
+          </nav>
+          <nav aria-label="Institution links">
+            <span>Institution</span>
+            <a href="#top">Rajalakshmi Engineering College</a>
+            <a href="#top">Examination cell</a>
+          </nav>
+        </div>
+        <div className="lp-frame lp-footer-bottom">
           <span>Question Paper Studio</span>
-          <span>Local institutional demonstration</span>
+          <span>Local institutional demonstration · not production authentication</span>
         </div>
       </footer>
     </div>
